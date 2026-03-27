@@ -167,16 +167,20 @@ export component MainWindow inherits Window {
         }
 
         // Progress Section
-        VerticalBox {
-            spacing: 8px;
-            height: 90px; // Increased height for multiple files overall progress + file progress + time
+        VerticalLayout {
+            spacing: 10px;
+            height: 110px; // More generous height
+            padding-bottom: 5px;
             Text {
                 text: status-text;
                 color: #1d1d1f;
                 font-size: 13px;
                 wrap: word-wrap;
                 vertical-alignment: top;
+                horizontal-alignment: left;
             }
+            // Add a small spacer to avoid clipping above the bar
+            Rectangle { height: 2px; }
             ProgressIndicator {
                 progress: progress;
                 height: 8px;
