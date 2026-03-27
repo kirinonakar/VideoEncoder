@@ -364,20 +364,24 @@ async fn main() -> Result<()> {
                     let mut stderr_acc = String::new();
                     
                     let mut total_duration = 0.0;
-                    let file_base_progress = idx as f32 / total_files as f32;
-
+                    let mut current_video_time = 0.0;
                     let mut cur_bitrate = "N/A".to_string();
                     let mut cur_speed = "N/A".to_string();
+                    let file_start_time = Instant::now();
+                    let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
+                    
+                    let file_base_progress = idx as f32 / total_files as f32;
 
                     loop {
+                        let mut should_update_ui = false;
+                        
                         tokio::select! {
-                            _ = async {
-                                while !signal_task.load(Ordering::SeqCst) {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                            _ = interval.tick() => {
+                                if signal_task.load(Ordering::SeqCst) {
+                                    let _ = child.kill().await;
+                                    break;
                                 }
-                            } => {
-                                let _ = child.kill().await;
-                                break;
+                                should_update_ui = true;
                             }
                             
                             read_res = stderr.read(&mut buffer) => {
@@ -398,61 +402,78 @@ async fn main() -> Result<()> {
                                                     total_duration = time_str_to_seconds(caps.get(1).unwrap().as_str());
                                                 }
                                             }
-
                                             if let Some(caps) = bitrate_re.captures(trimmed) {
                                                 cur_bitrate = caps.get(1).unwrap().as_str().to_string();
                                             }
-
                                             if let Some(caps) = speed_re.captures(trimmed) {
-                                                cur_speed = caps.get(1).unwrap().as_str().to_string();
+                                                cur_speed = caps.get(1).unwrap().as_str().trim_end_matches('x').to_string();
                                             }
-
                                             if let Some(caps) = time_re.captures(trimmed) {
-                                                let current_time = time_str_to_seconds(caps.get(1).unwrap().as_str());
-                                                if total_duration > 0.0 {
-                                                    let cur_file_pc = (current_time / total_duration).clamp(0.0, 1.0);
-                                                    let overall_pc = file_base_progress + (cur_file_pc / total_files as f32);
-                                                    
-                                                    let remaining_file_time = (total_duration - current_time).max(0.0);
-                                                    let time_info = format!("{}/{} ({} remaining)", 
-                                                        seconds_to_hms(current_time), 
-                                                        seconds_to_hms(total_duration), 
-                                                        seconds_to_hms(remaining_file_time));
-
-                                                    let batch_elapsed = batch_start_time.elapsed().as_secs_f32();
-                                                    let overall_time_info = if overall_pc > 0.01 {
-                                                        let total_est = batch_elapsed / overall_pc;
-                                                        let remaining_batch = total_est - batch_elapsed;
-                                                        format!("Started: {} / Est: {} ({} remaining)", 
-                                                            seconds_to_hms(batch_elapsed), 
-                                                            seconds_to_hms(total_est), 
-                                                            seconds_to_hms(remaining_batch))
-                                                    } else {
-                                                        format!("Started: {}", seconds_to_hms(batch_elapsed))
-                                                    };
-
-                                                    let progress_info = format!("{:.1}% ({}x, {})", cur_file_pc * 100.0, cur_speed, cur_bitrate);
-
-                                                    let _ = slint::invoke_from_event_loop({
-                                                        let weak = weak_task.clone();
-                                                        let f_name = base_msg.clone();
-                                                        move || {
-                                                            if let Some(ui) = weak.upgrade() {
-                                                                ui.set_overall_progress(overall_pc);
-                                                                ui.set_file_progress(cur_file_pc);
-                                                                ui.set_current_file_text(f_name.into());
-                                                                ui.set_current_progress_text(progress_info.into());
-                                                                ui.set_current_time_text(time_info.into());
-                                                                ui.set_overall_time_text(overall_time_info.into());
-                                                            }
-                                                        }
-                                                    });
-                                                }
+                                                current_video_time = time_str_to_seconds(caps.get(1).unwrap().as_str());
+                                                should_update_ui = true;
                                             }
                                         }
                                     }
                                 }
                             }
+                        }
+
+                        if should_update_ui {
+                            let file_elapsed = file_start_time.elapsed().as_secs_f32();
+                            let batch_elapsed = batch_start_time.elapsed().as_secs_f32();
+                            
+                            let cur_file_pc = if total_duration > 0.0 {
+                                (current_video_time / total_duration).clamp(0.0, 1.0)
+                            } else {
+                                0.0
+                            };
+                            
+                            let overall_pc = file_base_progress + (cur_file_pc / total_files as f32);
+                            
+                            // Calculate real elapsed time and estimated total/remaining wall-clock time for the current file
+                            let (file_est_total, remaining_file_time) = if cur_file_pc > 0.01 {
+                                let est = file_elapsed / cur_file_pc;
+                                (est, (est - file_elapsed).max(0.0))
+                            } else {
+                                (total_duration, (total_duration - current_video_time).max(0.0))
+                            };
+
+                            let time_info = if total_duration > 0.0 {
+                                format!("{} / {} ({} remaining)", 
+                                    seconds_to_hms(file_elapsed), 
+                                    seconds_to_hms(file_est_total), 
+                                    seconds_to_hms(remaining_file_time))
+                            } else {
+                                format!("{} (Analyzing...)", seconds_to_hms(file_elapsed))
+                            };
+
+                            let overall_time_info = if overall_pc > 0.01 {
+                                let total_est = batch_elapsed / overall_pc;
+                                let remaining_batch = (total_est - batch_elapsed).max(0.0);
+                                format!("Started: {} / Est: {} ({} remaining)", 
+                                    seconds_to_hms(batch_elapsed), 
+                                    seconds_to_hms(total_est), 
+                                    seconds_to_hms(remaining_batch))
+                            } else {
+                                format!("Started: {}", seconds_to_hms(batch_elapsed))
+                            };
+
+                            let progress_info = format!("{:.1}% (x{}, {})", cur_file_pc * 100.0, cur_speed, cur_bitrate);
+
+                            let _ = slint::invoke_from_event_loop({
+                                let weak = weak_task.clone();
+                                let f_name = base_msg.clone();
+                                move || {
+                                    if let Some(ui) = weak.upgrade() {
+                                        ui.set_overall_progress(overall_pc);
+                                        ui.set_file_progress(cur_file_pc);
+                                        ui.set_current_file_text(f_name.into());
+                                        ui.set_current_progress_text(progress_info.into());
+                                        ui.set_current_time_text(time_info.into());
+                                        ui.set_overall_time_text(overall_time_info.into());
+                                    }
+                                }
+                            });
                         }
                     }
 
