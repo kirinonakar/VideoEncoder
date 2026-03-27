@@ -43,10 +43,6 @@ You can download the latest version from the [Releases Page](https://github.com/
 -   **Asynchronous Processing**: Leverages `tokio` for non-blocking FFmpeg execution and log parsing.
 -   **Declarative UI**: Built using the [Slint](https://slint.dev/) UI framework for a responsive and lightweight experience.
 
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request or open an issue for bugs and feature requests.
-
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
