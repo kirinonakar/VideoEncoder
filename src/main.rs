@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use regex::Regex;
+use std::time::Instant;
 
 // --- Windows-specific Drag & Drop Hooks ---
 #[cfg(target_os = "windows")]
@@ -140,7 +141,7 @@ async fn main() -> Result<()> {
                 }
             }
             if let Some(ui) = weak.upgrade() {
-                ui.set_status_text(format!("{}개 파일/폴더 항목이 추가되었습니다.", added).into());
+                ui.set_current_file_text(format!("{} items added", added).into());
             }
         });
     }
@@ -180,7 +181,7 @@ async fn main() -> Result<()> {
                 ui.set_output_suffix("_h265".into());
                 ui.set_crf_value(19.0);
                 ui.set_output_folder("".into());
-                ui.set_status_text("옵선이 기본값으로 초기화되었습니다.".into());
+                ui.set_current_file_text("Options reset to default".into());
             }
         });
     }
@@ -198,7 +199,7 @@ async fn main() -> Result<()> {
                     model.push(p.to_string_lossy().to_string().into());
                 }
                 if let Some(ui) = weak.upgrade() {
-                    ui.set_status_text(format!("{}개 파일 추가됨", model.row_count()).into());
+                    ui.set_current_file_text(format!("{} files added", model.row_count()).into());
                 }
             }
         });
@@ -221,7 +222,7 @@ async fn main() -> Result<()> {
                     }
                 }
                 if let Some(ui) = weak.upgrade() {
-                    ui.set_status_text(format!("폴더에서 {}개 파일 추가됨", added).into());
+                    ui.set_current_file_text(format!("{} files added from folder", added).into());
                 }
             }
         });
@@ -236,7 +237,7 @@ async fn main() -> Result<()> {
                 model.remove(0);
             }
             if let Some(ui) = weak.upgrade() {
-                ui.set_status_text("파일 목록이 비워졌습니다.".into());
+                ui.set_current_file_text("List cleared".into());
             }
         });
     }
@@ -270,12 +271,14 @@ async fn main() -> Result<()> {
             }
 
             if ffmpeg.is_empty() {
-                ui.set_status_text("Error: FFmpeg 경로를 지정해 주세요.".into());
+                ui.set_current_file_text("Error: FFmpeg path not set".into());
                 return;
             }
 
             ui.set_is_encoding(true);
-            ui.set_progress(0.0);
+            ui.set_overall_progress(0.0);
+            ui.set_file_progress(0.0);
+            ui.set_overall_time_text("".into());
             signal.store(false, Ordering::SeqCst);
 
             let weak_task = weak.clone();
@@ -284,8 +287,9 @@ async fn main() -> Result<()> {
             tokio::spawn(async move {
                 let total_files = file_paths.len();
                 let mut success_count = 0;
+                let batch_start_time = Instant::now();
 
-                // Broad regex for both standard output and -progress output
+                // Regex patterns
                 let duration_re = Regex::new(r"Duration:\s*(\d{2,}:\d{2}:\d{2}\.\d{2})").unwrap();
                 let time_re = Regex::new(r"(?:time|out_time)=\s*(\d{2,}:\d{2}:\d{2}\.\d{2})").unwrap();
                 let bitrate_re = Regex::new(r"bitrate=\s*(\S+)").unwrap();
@@ -310,10 +314,12 @@ async fn main() -> Result<()> {
                     let base_msg = format!("[{}/{}] {}", idx + 1, total_files, input_path.file_name().unwrap_or_default().to_string_lossy());
                     let _ = slint::invoke_from_event_loop({
                         let weak = weak_task.clone();
-                        let msg = format!("{}\n분석 중...", base_msg);
+                        let msg = base_msg.clone();
                         move || {
                             if let Some(ui) = weak.upgrade() {
-                                ui.set_status_text(msg.into());
+                                ui.set_current_file_text(msg.into());
+                                ui.set_current_progress_text("Analyzing...".into());
+                                ui.set_current_time_text("".into());
                             }
                         }
                     });
@@ -337,10 +343,10 @@ async fn main() -> Result<()> {
                         Err(e) => {
                             let _ = slint::invoke_from_event_loop({
                                 let weak = weak_task.clone();
-                                let err_msg = format!("FFmpeg 실행 실패: {}", e);
+                                let err_msg = format!("FFmpeg execution failed: {}", e);
                                 move || {
                                     if let Some(ui) = weak.upgrade() {
-                                        ui.set_status_text(err_msg.into());
+                                        ui.set_current_file_text(err_msg.into());
                                     }
                                 }
                             });
@@ -355,7 +361,6 @@ async fn main() -> Result<()> {
                     let mut total_duration = 0.0;
                     let file_base_progress = idx as f32 / total_files as f32;
 
-                    // Current status placeholders
                     let mut cur_bitrate = "N/A".to_string();
                     let mut cur_speed = "N/A".to_string();
 
@@ -400,29 +405,40 @@ async fn main() -> Result<()> {
                                             if let Some(caps) = time_re.captures(trimmed) {
                                                 let current_time = time_str_to_seconds(caps.get(1).unwrap().as_str());
                                                 if total_duration > 0.0 {
-                                                    let cur_pc = (current_time / total_duration).clamp(0.0, 1.0);
-                                                    let overall_pc = file_base_progress + (cur_pc / total_files as f32);
+                                                    let cur_file_pc = (current_time / total_duration).clamp(0.0, 1.0);
+                                                    let overall_pc = file_base_progress + (cur_file_pc / total_files as f32);
                                                     
-                                                    let remaining_time = (total_duration - current_time).max(0.0);
+                                                    let remaining_file_time = (total_duration - current_time).max(0.0);
                                                     let time_info = format!("{}/{} ({} remaining)", 
                                                         seconds_to_hms(current_time), 
                                                         seconds_to_hms(total_duration), 
-                                                        seconds_to_hms(remaining_time));
+                                                        seconds_to_hms(remaining_file_time));
 
-                                                    let mut full_status = if total_files > 1 {
-                                                        format!("Overall Progression: {:.1}%\n", overall_pc * 100.0)
+                                                    let batch_elapsed = batch_start_time.elapsed().as_secs_f32();
+                                                    let overall_time_info = if overall_pc > 0.01 {
+                                                        let total_est = batch_elapsed / overall_pc;
+                                                        let remaining_batch = total_est - batch_elapsed;
+                                                        format!("Started: {} / Est: {} ({} remaining)", 
+                                                            seconds_to_hms(batch_elapsed), 
+                                                            seconds_to_hms(total_est), 
+                                                            seconds_to_hms(remaining_batch))
                                                     } else {
-                                                        String::new()
+                                                        format!("Started: {}", seconds_to_hms(batch_elapsed))
                                                     };
-                                                    
-                                                    full_status.push_str(&format!("{}: {:.1}% ({}x, {})\n{}", base_msg, cur_pc * 100.0, cur_speed, cur_bitrate, time_info));
+
+                                                    let progress_info = format!("{:.1}% ({}x, {})", cur_file_pc * 100.0, cur_speed, cur_bitrate);
 
                                                     let _ = slint::invoke_from_event_loop({
                                                         let weak = weak_task.clone();
+                                                        let f_name = base_msg.clone();
                                                         move || {
                                                             if let Some(ui) = weak.upgrade() {
-                                                                ui.set_progress(overall_pc);
-                                                                ui.set_status_text(full_status.into());
+                                                                ui.set_overall_progress(overall_pc);
+                                                                ui.set_file_progress(cur_file_pc);
+                                                                ui.set_current_file_text(f_name.into());
+                                                                ui.set_current_progress_text(progress_info.into());
+                                                                ui.set_current_time_text(time_info.into());
+                                                                ui.set_overall_time_text(overall_time_info.into());
                                                             }
                                                         }
                                                     });
@@ -439,22 +455,31 @@ async fn main() -> Result<()> {
                         Ok(status) if status.success() => {
                             if !signal_task.load(Ordering::SeqCst) {
                                 success_count += 1;
+                            } else {
+                                if output_path.exists() { let _ = std::fs::remove_file(&output_path); }
                             }
                         }
-                        _ => {}
+                        _ => {
+                            if signal_task.load(Ordering::SeqCst) && output_path.exists() {
+                                let _ = std::fs::remove_file(&output_path);
+                            }
+                        }
                     }
                 }
 
                 let final_msg = if signal_task.load(Ordering::SeqCst) {
-                    "작업이 중단되었습니다.".to_string()
+                    "Task stopped".to_string()
                 } else {
-                    format!("작업 완료: {}/{} 성공", success_count, total_files)
+                    format!("Finished: {}/{} Success", success_count, total_files)
                 };
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = weak_task.upgrade() {
-                        ui.set_status_text(final_msg.into());
-                        ui.set_progress(1.0);
+                        ui.set_current_file_text(final_msg.into());
+                        ui.set_current_progress_text("".into());
+                        ui.set_current_time_text("".into());
+                        ui.set_overall_progress(1.0);
+                        ui.set_file_progress(1.0);
                         ui.set_is_encoding(false);
                     }
                 });
@@ -474,18 +499,18 @@ async fn main() -> Result<()> {
                 if let Ok(handle) = window_handle.window_handle() {
                     if let RawWindowHandle::Win32(h) = handle.as_raw() {
                         let hwnd = h.hwnd.get() as HWND;
-                        println!("Slint HWND 획득 성공 (지연 실행): {:?}", hwnd);
+                        println!("Slint HWND success (deferred): {:?}", hwnd);
 
                         unsafe {
                             let hr = RevokeDragDrop(hwnd);
-                            println!("RevokeDragDrop 실행 (S_OK=0 이면 정상): {}", hr);
+                            println!("RevokeDragDrop (S_OK=0): {}", hr);
 
                             ChangeWindowMessageFilterEx(hwnd, WM_DROPFILES, MSGFLT_ALLOW, std::ptr::null_mut());
                             ChangeWindowMessageFilterEx(hwnd, 0x0049, MSGFLT_ALLOW, std::ptr::null_mut()); 
                             ChangeWindowMessageFilterEx(hwnd, 0x004A, MSGFLT_ALLOW, std::ptr::null_mut());
                             
                             DragAcceptFiles(hwnd, 1);
-                            println!("DragAcceptFiles 설정 완료");
+                            println!("DragAcceptFiles enabled");
 
                             let prev_proc = SetWindowLongPtrW(
                                 hwnd,
@@ -494,11 +519,11 @@ async fn main() -> Result<()> {
                             );
                             
                             if prev_proc != 0 {
-                                println!("WndProc 후킹 성공. 이전 주소: 0x{:X}", prev_proc);
+                                println!("WndProc hook success. Prev addr: 0x{:X}", prev_proc);
                                 type WndProcFn = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
                                 ORIGINAL_WNDPROC = Some(core::mem::transmute::<isize, WndProcFn>(prev_proc));
                             } else {
-                                println!("경고: SetWindowLongPtrW 실패. 에러 코드: {}", GetLastError());
+                                println!("Warning: SetWindowLongPtrW failed: {}", GetLastError());
                             }
                         }
                     }

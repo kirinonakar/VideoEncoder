@@ -3,6 +3,7 @@ import { Button, LineEdit, Slider, HorizontalBox, VerticalBox, ProgressIndicator
 export component MainWindow inherits Window {
     title: "VideoEncoder FFmpeg Wrapper";
     icon: @image-url("app.png");
+    default-font-family: "Segoe UI";
     min-width: 650px;
     min-height: 550px;
     background: #f5f5f7; // Soft Light Gray background
@@ -26,8 +27,12 @@ export component MainWindow inherits Window {
     in-out property <float> crf-value: 19.0;
     in-out property <string> output-folder: "";
     in-out property <[string]> file-list: [];
-    in-out property <float> progress: 0.0;
-    in-out property <string> status-text: "준비 완료";
+    in-out property <float> overall-progress: 0.0;
+    in-out property <float> file-progress: 0.0;
+    in-out property <string> overall-time-text: "";
+    in-out property <string> current_file_text: "";
+    in-out property <string> current_progress_text: "";
+    in-out property <string> current_time_text: "";
     in-out property <bool> is-encoding: false;
 
     VerticalBox {
@@ -169,22 +174,63 @@ export component MainWindow inherits Window {
 
         // Progress Section
         VerticalLayout {
-            spacing: 10px;
-            height: 110px; // More generous height
-            padding-bottom: 5px;
-            Text {
-                text: status-text;
-                color: #1d1d1f;
-                font-size: 13px;
-                wrap: word-wrap;
-                vertical-alignment: top;
-                horizontal-alignment: left;
+            spacing: 12px;
+            padding: 10px;
+            height: 180px; 
+            
+            // Overall Section
+            VerticalLayout {
+                spacing: 4px;
+                HorizontalBox {
+                    padding: 0;
+                    Text { text: "전체 진행도"; color: #1d1d1f; font-weight: 600; font-size: 14px; font-family: "Segoe UI"; }
+                    Rectangle {} // Spacer
+                    Text { text: overall-time-text; color: #86868b; font-size: 12px; vertical-alignment: bottom; font-family: "Segoe UI"; }
+                }
+                ProgressIndicator {
+                    progress: overall-progress;
+                    height: 10px;
+                }
             }
-            // Add a small spacer to avoid clipping above the bar
-            Rectangle { height: 2px; }
-            ProgressIndicator {
-                progress: progress;
-                height: 8px;
+
+            Rectangle { height: 1px; background: #e5e5e7; } // Separator
+
+            // Current File Section
+            VerticalLayout {
+                spacing: 2px;
+                Text { text: "현재 파일 진행"; color: #1d1d1f; font-weight: 500; font-size: 13px; font-family: "Segoe UI"; }
+                
+                // Filename (First line)
+                Text {
+                    text: current_file_text;
+                    color: #1d1d1f;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                    height: 18px;
+                    vertical-alignment: top;
+                    font-family: "Segoe UI";
+                }
+                // Progress details (Second line)
+                Text {
+                    text: current_progress_text;
+                    color: #1d1d1f;
+                    font-size: 11px;
+                    height: 18px;
+                    font-family: "Segoe UI";
+                }
+                // Time info (Third line)
+                Text {
+                    text: current_time_text;
+                    color: #86868b;
+                    font-size: 11px;
+                    height: 18px;
+                    font-family: "Segoe UI";
+                }
+
+                ProgressIndicator {
+                    progress: file_progress;
+                    height: 8px;
+                }
             }
         }
 
