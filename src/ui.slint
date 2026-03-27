@@ -5,7 +5,7 @@ export component MainWindow inherits Window {
     icon: @image-url("app.png");
     default-font-family: "Segoe UI";
     min-width: 650px;
-    min-height: 550px;
+    min-height: 480px;
     background: #f5f5f7; // Soft Light Gray background
 
     // Callbacks to Rust
@@ -36,13 +36,13 @@ export component MainWindow inherits Window {
     in-out property <bool> is-encoding: false;
 
     VerticalBox {
-        padding: 24px;
-        spacing: 16px;
+        padding: 16px;
+        spacing: 12px;
 
         // Header
         Text {
             text: "VideoEncoder FFmpeg Wrapper";
-            font-size: 26px;
+            font-size: 20px;
             font-weight: 700;
             color: #0071e3; // Apple blue accent
             horizontal-alignment: center;
@@ -56,8 +56,8 @@ export component MainWindow inherits Window {
             border-color: #d2d2d7;
             
             VerticalLayout {
-                padding: 20px;
-                spacing: 12px;
+                padding: 12px;
+                spacing: 8px;
 
                 HorizontalBox {
                     spacing: 12px;
@@ -129,7 +129,7 @@ export component MainWindow inherits Window {
             border-color: #d2d2d7;
             
             VerticalLayout {
-                padding: 16px;
+                padding: 12px;
                 spacing: 8px;
                 
                 HorizontalBox {
@@ -145,7 +145,7 @@ export component MainWindow inherits Window {
                 
                 // Content area
                 Rectangle {
-                    height: 180px;
+                    height: 120px;
                     background: #fbfbfd;
                     border-radius: 6px;
                     border-width: 1px;
@@ -174,9 +174,9 @@ export component MainWindow inherits Window {
 
         // Progress Section
         VerticalLayout {
-            spacing: 12px;
-            padding: 10px;
-            height: 180px; 
+            spacing: 8px;
+            padding: 4px;
+            height: 150px; 
             
             // Overall Section
             VerticalLayout {
@@ -244,7 +244,7 @@ export component MainWindow inherits Window {
                 primary: true;
                 enabled: !is-encoding && file-list.length > 0;
                 clicked => { start-encoding(); }
-                height: 44px;
+                height: 36px;
                 width: 180px;
             }
             
@@ -252,7 +252,7 @@ export component MainWindow inherits Window {
                 text: "중단";
                 enabled: is-encoding;
                 clicked => { stop-encoding(); }
-                height: 44px;
+                height: 36px;
                 width: 180px;
             }
         }

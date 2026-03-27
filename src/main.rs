@@ -328,6 +328,9 @@ async fn main() -> Result<()> {
 
                     // Run FFmpeg
                     let mut cmd = Command::new(&ffmpeg);
+                    #[cfg(windows)]
+                    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
                     cmd.arg("-y")
                         .arg("-i").arg(input_path)
                         .arg("-c:v").arg("libx265")
