@@ -41,6 +41,7 @@ export component MainWindow inherits Window {
 
         // Header
         Text {
+            vertical-stretch: 0;
             text: "VideoEncoder FFmpeg Wrapper";
             font-size: 20px;
             font-weight: 700;
@@ -50,16 +51,17 @@ export component MainWindow inherits Window {
 
         // Configuration Section
         Rectangle {
+            vertical-stretch: 0;
             background: #ffffff; // White card
             border-radius: 12px;
             border-width: 1px;
             border-color: #d2d2d7;
             
             VerticalLayout {
-                padding: 12px;
-                spacing: 8px;
+                padding: 10px;
+                spacing: 6px;
 
-                HorizontalBox {
+                HorizontalLayout {
                     spacing: 12px;
                     Text { text: "FFmpeg 경로:"; color: #1d1d1f; vertical-alignment: center; width: 100px; font-weight: 500; }
                     LineEdit {
@@ -73,7 +75,7 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                HorizontalBox {
+                HorizontalLayout {
                     spacing: 12px;
                     Text { text: "출력 Suffix:"; color: #1d1d1f; vertical-alignment: center; width: 100px; font-weight: 500;}
                     LineEdit {
@@ -81,7 +83,7 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                HorizontalBox {
+                HorizontalLayout {
                     spacing: 12px;
                     VerticalLayout {
                         width: 100px;
@@ -97,7 +99,7 @@ export component MainWindow inherits Window {
                     Text { text: round(crf-value); color: #1d1d1f; vertical-alignment: center; width: 30px; }
                 }
 
-                HorizontalBox {
+                HorizontalLayout {
                     spacing: 12px;
                     Text { text: "출력 폴더:"; color: #1d1d1f; vertical-alignment: center; width: 100px; font-weight: 500; }
                     LineEdit {
@@ -111,7 +113,7 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                HorizontalBox {
+                HorizontalLayout {
                     alignment: start;
                     Button {
                         text: "옵션 초기화";
@@ -123,19 +125,22 @@ export component MainWindow inherits Window {
 
         // File List Section
         Rectangle {
+            vertical-stretch: 1;
             background: #ffffff;
             border-radius: 12px;
             border-width: 1px;
             border-color: #d2d2d7;
             
             VerticalLayout {
-                padding: 12px;
-                spacing: 8px;
+                padding: 10px;
+                spacing: 6px;
                 
-                HorizontalBox {
-                    Text { text: "인코딩 대기 목록 (" + file-list.length + ")"; color: #1d1d1f; font-weight: 600; vertical-alignment: center; }
+                HorizontalLayout {
+                    vertical-stretch: 0;
+                    spacing: 8px;
+                    Text { text: "인코딩 대기 목록 (" + file-list.length + ")"; color: #1d1d1f; font-weight: 600; font-size: 16px; vertical-alignment: center; }
                     Rectangle {} // Spacer
-                    HorizontalBox {
+                    HorizontalLayout {
                         spacing: 8px;
                         Button { text: "파일 추가"; clicked => { pick-files(); } }
                         Button { text: "폴더 추가"; clicked => { pick-folder(); } }
@@ -145,7 +150,8 @@ export component MainWindow inherits Window {
                 
                 // Content area
                 Rectangle {
-                    height: 120px;
+                    vertical-stretch: 1;
+                    min-height: 120px;
                     background: #fbfbfd;
                     border-radius: 6px;
                     border-width: 1px;
@@ -174,6 +180,7 @@ export component MainWindow inherits Window {
 
         // Progress Section
         VerticalLayout {
+            vertical-stretch: 0;
             spacing: 8px;
             padding: 4px;
             height: 150px; 
@@ -236,6 +243,7 @@ export component MainWindow inherits Window {
 
         // Controls Section
         HorizontalBox {
+            vertical-stretch: 0;
             spacing: 24px;
             alignment: center;
             
