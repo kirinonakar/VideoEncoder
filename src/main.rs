@@ -302,7 +302,7 @@ async fn main() -> Result<()> {
                     let base_msg = format!("[{}/{}] {}", idx + 1, total_files, input_path.file_name().unwrap_or_default().to_string_lossy());
                     let _ = slint::invoke_from_event_loop({
                         let weak = weak_task.clone();
-                        let msg = format!("{} - 분석 중...", base_msg);
+                        let msg = format!("{}\n분석 중...", base_msg);
                         move || {
                             if let Some(ui) = weak.upgrade() {
                                 ui.set_status_text(msg.into());
@@ -320,7 +320,7 @@ async fn main() -> Result<()> {
                         .arg("-c:a").arg("copy")
                         .arg(&output_path)
                         .stderr(Stdio::piped())
-                        .stdin(Stdio::piped()) // Need stdin to send 'q' for quit if needed
+                        .stdin(Stdio::null())
                         .stdout(Stdio::null());
 
                     let mut child = match cmd.spawn() {
@@ -346,57 +346,71 @@ async fn main() -> Result<()> {
                     let mut total_duration = 0.0;
                     let file_base_progress = idx as f32 / total_files as f32;
 
-                    while let Ok(n) = reader.read_line(&mut line).await {
-                        if n == 0 { break; }
-                        
-                        // Parse Duration
-                        if total_duration == 0.0 {
-                            if let Some(caps) = duration_re.captures(&line) {
-                                let dur_str = caps.get(1).unwrap().as_str();
-                                total_duration = time_str_to_seconds(dur_str);
+                    loop {
+                        line.clear();
+                        tokio::select! {
+                            // 1. Check for "Stop" signal frequently
+                            _ = async {
+                                while !signal_task.load(Ordering::SeqCst) {
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                                }
+                            } => {
+                                let _ = child.kill().await;
+                                break;
                             }
-                        }
-
-                        // Parse Progress Time, Bitrate, Speed
-                        if let Some(caps) = time_re.captures(&line) {
-                            let time_str = caps.get(1).unwrap().as_str();
-                            let current_time = time_str_to_seconds(time_str);
                             
-                            let bitrate = bitrate_re.captures(&line)
-                                .map(|c| c.get(1).unwrap().as_str())
-                                .unwrap_or("N/A");
-                            let speed = speed_re.captures(&line)
-                                .map(|c| c.get(1).unwrap().as_str())
-                                .unwrap_or("N/A");
+                            // 2. Read output from FFmpeg
+                            read_res = reader.read_line(&mut line) => {
+                                match read_res {
+                                    Ok(0) | Err(_) => break,
+                                    Ok(_) => {
+                                        // Parse Duration
+                                        if total_duration == 0.0 {
+                                            if let Some(caps) = duration_re.captures(&line) {
+                                                let dur_str = caps.get(1).unwrap().as_str();
+                                                total_duration = time_str_to_seconds(dur_str);
+                                            }
+                                        }
 
-                            if total_duration > 0.0 {
-                                let file_pc = (current_time / total_duration).clamp(0.0, 1.0);
-                                let overall_pc = file_base_progress + (file_pc / total_files as f32);
-                                
-                                let _ = slint::invoke_from_event_loop({
-                                    let weak = weak_task.clone();
-                                    let status = format!("{} - {:.1}% ({}x, {})", base_msg, file_pc * 100.0, speed, bitrate);
-                                    move || {
-                                        if let Some(ui) = weak.upgrade() {
-                                            ui.set_progress(overall_pc);
-                                            ui.set_status_text(status.into());
+                                        // Parse Progress
+                                        if let Some(caps) = time_re.captures(&line) {
+                                            let time_str = caps.get(1).unwrap().as_str();
+                                            let current_time = time_str_to_seconds(time_str);
+                                            
+                                            let bitrate = bitrate_re.captures(&line)
+                                                .map(|c| c.get(1).unwrap().as_str())
+                                                .unwrap_or("N/A");
+                                            let speed = speed_re.captures(&line)
+                                                .map(|c| c.get(1).unwrap().as_str())
+                                                .unwrap_or("N/A");
+
+                                            if total_duration > 0.0 {
+                                                let file_pc = (current_time / total_duration).clamp(0.0, 1.0);
+                                                let overall_pc = file_base_progress + (file_pc / total_files as f32);
+                                                
+                                                let _ = slint::invoke_from_event_loop({
+                                                    let weak = weak_task.clone();
+                                                    let status = format!("{}\n{:.1}% ({}x, {})", base_msg, file_pc * 100.0, speed, bitrate);
+                                                    move || {
+                                                        if let Some(ui) = weak.upgrade() {
+                                                            ui.set_progress(overall_pc);
+                                                            ui.set_status_text(status.into());
+                                                        }
+                                                    }
+                                                });
+                                            }
                                         }
                                     }
-                                });
+                                }
                             }
-                        }
-
-                        line.clear();
-
-                        if signal_task.load(Ordering::SeqCst) {
-                            let _ = child.kill().await;
-                            break;
                         }
                     }
 
                     match child.wait().await {
                         Ok(status) if status.success() => {
-                            success_count += 1;
+                            if !signal_task.load(Ordering::SeqCst) {
+                                success_count += 1;
+                            }
                         }
                         _ => {}
                     }
