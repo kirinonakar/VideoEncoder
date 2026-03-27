@@ -77,7 +77,12 @@ export component MainWindow inherits Window {
 
                 HorizontalBox {
                     spacing: 12px;
-                    Text { text: "화질 (CRF):"; color: #1d1d1f; vertical-alignment: center; width: 100px; font-weight: 500; }
+                    VerticalLayout {
+                        width: 100px;
+                        alignment: center;
+                        Text { text: "화질 (CRF):"; color: #1d1d1f; font-weight: 500; }
+                        Text { text: "(Lower is better)"; color: #86868b; font-size: 10px; }
+                    }
                     Slider {
                         minimum: 0;
                         maximum: 51;
@@ -163,12 +168,14 @@ export component MainWindow inherits Window {
 
         // Progress Section
         VerticalBox {
-            spacing: 6px;
+            spacing: 8px;
+            height: 55px; // Fixed height to prevent layout shift with multi-line status
             Text {
                 text: status-text;
                 color: #1d1d1f;
                 font-size: 13px;
                 wrap: word-wrap;
+                vertical-alignment: top;
             }
             ProgressIndicator {
                 progress: progress;

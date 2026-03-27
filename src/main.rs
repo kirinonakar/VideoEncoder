@@ -277,9 +277,9 @@ async fn main() -> Result<()> {
                 let total_files = file_paths.len();
                 let mut success_count = 0;
 
-                // Robust Regex patterns for parsing Duration, Time, Bitrate, Speed
+                // Broad regex for both standard output and -progress output
                 let duration_re = Regex::new(r"Duration:\s*(\d{2,}:\d{2}:\d{2}\.\d{2})").unwrap();
-                let time_re = Regex::new(r"time=\s*(\d{2,}:\d{2}:\d{2}\.\d{2})").unwrap();
+                let time_re = Regex::new(r"(?:time|out_time)=\s*(\d{2,}:\d{2}:\d{2}\.\d{2})").unwrap();
                 let bitrate_re = Regex::new(r"bitrate=\s*(\S+)").unwrap();
                 let speed_re = Regex::new(r"speed=\s*(\S+)").unwrap();
 
@@ -318,7 +318,7 @@ async fn main() -> Result<()> {
                         .arg("-crf").arg(crf.to_string())
                         .arg("-preset").arg("medium")
                         .arg("-c:a").arg("copy")
-                        .arg("-progress").arg("pipe:2") // Force progress output even more explicitly
+                        .arg("-progress").arg("pipe:2")
                         .arg(&output_path)
                         .stderr(Stdio::piped())
                         .stdin(Stdio::null())
@@ -347,6 +347,10 @@ async fn main() -> Result<()> {
                     let mut total_duration = 0.0;
                     let file_base_progress = idx as f32 / total_files as f32;
 
+                    // Current status placeholders
+                    let mut cur_bitrate = "N/A".to_string();
+                    let mut cur_speed = "N/A".to_string();
+
                     loop {
                         tokio::select! {
                             _ = async {
@@ -365,41 +369,39 @@ async fn main() -> Result<()> {
                                         let fragment = String::from_utf8_lossy(&buffer[..n]);
                                         stderr_acc.push_str(&fragment);
                                         
-                                        // FFmpeg logs often end with \r for progress status
-                                        // Split by either \r or \n to catch all updates
                                         while let Some(pos) = stderr_acc.find(|c| c == '\n' || c == '\r') {
                                             let line = stderr_acc[..pos].to_string();
                                             stderr_acc = stderr_acc[pos+1..].to_string();
-                                            
-                                            if line.trim().is_empty() { continue; }
+                                            let trimmed = line.trim();
+                                            if trimmed.is_empty() { continue; }
 
-                                            // Parse Duration (only once per file)
+                                            // Parse Duration
                                             if total_duration == 0.0 {
-                                                if let Some(caps) = duration_re.captures(&line) {
-                                                    let dur_str = caps.get(1).unwrap().as_str();
-                                                    total_duration = time_str_to_seconds(dur_str);
+                                                if let Some(caps) = duration_re.captures(trimmed) {
+                                                    total_duration = time_str_to_seconds(caps.get(1).unwrap().as_str());
                                                 }
                                             }
 
-                                            // Parse Progress
-                                            if let Some(caps) = time_re.captures(&line) {
-                                                let time_str = caps.get(1).unwrap().as_str();
-                                                let current_time = time_str_to_seconds(time_str);
-                                                
-                                                let bitrate = bitrate_re.captures(&line)
-                                                    .map(|c| c.get(1).unwrap().as_str())
-                                                    .unwrap_or("N/A");
-                                                let speed = speed_re.captures(&line)
-                                                    .map(|c| c.get(1).unwrap().as_str())
-                                                    .unwrap_or("N/A");
+                                            // Parse Bitrate
+                                            if let Some(caps) = bitrate_re.captures(trimmed) {
+                                                cur_bitrate = caps.get(1).unwrap().as_str().to_string();
+                                            }
 
+                                            // Parse Speed
+                                            if let Some(caps) = speed_re.captures(trimmed) {
+                                                cur_speed = caps.get(1).unwrap().as_str().to_string();
+                                            }
+
+                                            // Parse Time and Trigger UI Update
+                                            if let Some(caps) = time_re.captures(trimmed) {
+                                                let current_time = time_str_to_seconds(caps.get(1).unwrap().as_str());
                                                 if total_duration > 0.0 {
-                                                    let file_pc = (current_time / total_duration).clamp(0.0, 1.0);
-                                                    let overall_pc = file_base_progress + (file_pc / total_files as f32);
+                                                    let cur_pc = (current_time / total_duration).clamp(0.0, 1.0);
+                                                    let overall_pc = file_base_progress + (cur_pc / total_files as f32);
                                                     
                                                     let _ = slint::invoke_from_event_loop({
                                                         let weak = weak_task.clone();
-                                                        let status = format!("{}\n{:.1}% ({}x, {})", base_msg, file_pc * 100.0, speed, bitrate);
+                                                        let status = format!("{}\n{:.1}% ({}, {})", base_msg, cur_pc * 100.0, cur_speed, cur_bitrate);
                                                         move || {
                                                             if let Some(ui) = weak.upgrade() {
                                                                 ui.set_progress(overall_pc);
