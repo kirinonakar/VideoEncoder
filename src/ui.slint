@@ -185,7 +185,7 @@ export component MainWindow inherits Window {
                     padding: 0;
                     Text { text: "전체 진행도"; color: #1d1d1f; font-weight: 600; font-size: 14px; font-family: "Segoe UI"; }
                     Rectangle {} // Spacer
-                    Text { text: overall-time-text; color: #86868b; font-size: 12px; vertical-alignment: bottom; font-family: "Segoe UI"; }
+                    Text { text: overall-time-text; color: #86868b; font-size: 13px; vertical-alignment: bottom; font-family: "Segoe UI"; }
                 }
                 ProgressIndicator {
                     progress: overall-progress;
@@ -204,9 +204,9 @@ export component MainWindow inherits Window {
                 Text {
                     text: current_file_text;
                     color: #1d1d1f;
-                    font-size: 12px;
+                    font-size: 13px;
                     wrap: word-wrap;
-                    height: 18px;
+                    height: 20px;
                     vertical-alignment: top;
                     font-family: "Segoe UI";
                 }
@@ -214,16 +214,16 @@ export component MainWindow inherits Window {
                 Text {
                     text: current_progress_text;
                     color: #1d1d1f;
-                    font-size: 11px;
-                    height: 18px;
+                    font-size: 13px;
+                    height: 20px;
                     font-family: "Segoe UI";
                 }
                 // Time info (Third line)
                 Text {
                     text: current_time_text;
                     color: #86868b;
-                    font-size: 11px;
-                    height: 18px;
+                    font-size: 13px;
+                    height: 20px;
                     font-family: "Segoe UI";
                 }
 
