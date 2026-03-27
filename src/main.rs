@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use regex::Regex;
 
@@ -75,9 +75,9 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 fn time_str_to_seconds(time_str: &str) -> f32 {
     let parts: Vec<&str> = time_str.split(':').collect();
     if parts.len() == 3 {
-        let h: f32 = parts[0].parse().unwrap_or(0.0);
-        let m: f32 = parts[1].parse().unwrap_or(0.0);
-        let s: f32 = parts[2].parse().unwrap_or(0.0);
+        let h: f32 = parts[0].trim().parse().unwrap_or(0.0);
+        let m: f32 = parts[1].trim().parse().unwrap_or(0.0);
+        let s: f32 = parts[2].trim().parse().unwrap_or(0.0);
         return h * 3600.0 + m * 60.0 + s;
     }
     0.0
@@ -277,11 +277,11 @@ async fn main() -> Result<()> {
                 let total_files = file_paths.len();
                 let mut success_count = 0;
 
-                // Regex patterns for parsing Duration, Time, Bitrate, Speed
-                let duration_re = Regex::new(r"Duration: (\d{2}:\d{2}:\d{2}\.\d{2})").unwrap();
-                let time_re = Regex::new(r"time=(\d{2}:\d{2}:\d{2}\.\d{2})").unwrap();
-                let bitrate_re = Regex::new(r"bitrate=\s*([\d\.]+\w+)/s").unwrap();
-                let speed_re = Regex::new(r"speed=\s*([\d\.]+)x").unwrap();
+                // Robust Regex patterns for parsing Duration, Time, Bitrate, Speed
+                let duration_re = Regex::new(r"Duration:\s*(\d{2,}:\d{2}:\d{2}\.\d{2})").unwrap();
+                let time_re = Regex::new(r"time=\s*(\d{2,}:\d{2}:\d{2}\.\d{2})").unwrap();
+                let bitrate_re = Regex::new(r"bitrate=\s*(\S+)").unwrap();
+                let speed_re = Regex::new(r"speed=\s*(\S+)").unwrap();
 
                 for (idx, input_path) in file_paths.iter().enumerate() {
                     if signal_task.load(Ordering::SeqCst) {
@@ -318,6 +318,7 @@ async fn main() -> Result<()> {
                         .arg("-crf").arg(crf.to_string())
                         .arg("-preset").arg("medium")
                         .arg("-c:a").arg("copy")
+                        .arg("-progress").arg("pipe:2") // Force progress output even more explicitly
                         .arg(&output_path)
                         .stderr(Stdio::piped())
                         .stdin(Stdio::null())
@@ -339,17 +340,15 @@ async fn main() -> Result<()> {
                         }
                     };
 
-                    let stderr = child.stderr.take().unwrap();
-                    let mut reader = BufReader::new(stderr);
-                    let mut line = String::new();
+                    let mut stderr = child.stderr.take().unwrap();
+                    let mut buffer = [0u8; 4096];
+                    let mut stderr_acc = String::new();
                     
                     let mut total_duration = 0.0;
                     let file_base_progress = idx as f32 / total_files as f32;
 
                     loop {
-                        line.clear();
                         tokio::select! {
-                            // 1. Check for "Stop" signal frequently
                             _ = async {
                                 while !signal_task.load(Ordering::SeqCst) {
                                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -359,45 +358,56 @@ async fn main() -> Result<()> {
                                 break;
                             }
                             
-                            // 2. Read output from FFmpeg
-                            read_res = reader.read_line(&mut line) => {
+                            read_res = stderr.read(&mut buffer) => {
                                 match read_res {
                                     Ok(0) | Err(_) => break,
-                                    Ok(_) => {
-                                        // Parse Duration
-                                        if total_duration == 0.0 {
-                                            if let Some(caps) = duration_re.captures(&line) {
-                                                let dur_str = caps.get(1).unwrap().as_str();
-                                                total_duration = time_str_to_seconds(dur_str);
-                                            }
-                                        }
-
-                                        // Parse Progress
-                                        if let Some(caps) = time_re.captures(&line) {
-                                            let time_str = caps.get(1).unwrap().as_str();
-                                            let current_time = time_str_to_seconds(time_str);
+                                    Ok(n) => {
+                                        let fragment = String::from_utf8_lossy(&buffer[..n]);
+                                        stderr_acc.push_str(&fragment);
+                                        
+                                        // FFmpeg logs often end with \r for progress status
+                                        // Split by either \r or \n to catch all updates
+                                        while let Some(pos) = stderr_acc.find(|c| c == '\n' || c == '\r') {
+                                            let line = stderr_acc[..pos].to_string();
+                                            stderr_acc = stderr_acc[pos+1..].to_string();
                                             
-                                            let bitrate = bitrate_re.captures(&line)
-                                                .map(|c| c.get(1).unwrap().as_str())
-                                                .unwrap_or("N/A");
-                                            let speed = speed_re.captures(&line)
-                                                .map(|c| c.get(1).unwrap().as_str())
-                                                .unwrap_or("N/A");
+                                            if line.trim().is_empty() { continue; }
 
-                                            if total_duration > 0.0 {
-                                                let file_pc = (current_time / total_duration).clamp(0.0, 1.0);
-                                                let overall_pc = file_base_progress + (file_pc / total_files as f32);
+                                            // Parse Duration (only once per file)
+                                            if total_duration == 0.0 {
+                                                if let Some(caps) = duration_re.captures(&line) {
+                                                    let dur_str = caps.get(1).unwrap().as_str();
+                                                    total_duration = time_str_to_seconds(dur_str);
+                                                }
+                                            }
+
+                                            // Parse Progress
+                                            if let Some(caps) = time_re.captures(&line) {
+                                                let time_str = caps.get(1).unwrap().as_str();
+                                                let current_time = time_str_to_seconds(time_str);
                                                 
-                                                let _ = slint::invoke_from_event_loop({
-                                                    let weak = weak_task.clone();
-                                                    let status = format!("{}\n{:.1}% ({}x, {})", base_msg, file_pc * 100.0, speed, bitrate);
-                                                    move || {
-                                                        if let Some(ui) = weak.upgrade() {
-                                                            ui.set_progress(overall_pc);
-                                                            ui.set_status_text(status.into());
+                                                let bitrate = bitrate_re.captures(&line)
+                                                    .map(|c| c.get(1).unwrap().as_str())
+                                                    .unwrap_or("N/A");
+                                                let speed = speed_re.captures(&line)
+                                                    .map(|c| c.get(1).unwrap().as_str())
+                                                    .unwrap_or("N/A");
+
+                                                if total_duration > 0.0 {
+                                                    let file_pc = (current_time / total_duration).clamp(0.0, 1.0);
+                                                    let overall_pc = file_base_progress + (file_pc / total_files as f32);
+                                                    
+                                                    let _ = slint::invoke_from_event_loop({
+                                                        let weak = weak_task.clone();
+                                                        let status = format!("{}\n{:.1}% ({}x, {})", base_msg, file_pc * 100.0, speed, bitrate);
+                                                        move || {
+                                                            if let Some(ui) = weak.upgrade() {
+                                                                ui.set_progress(overall_pc);
+                                                                ui.set_status_text(status.into());
+                                                            }
                                                         }
-                                                    }
-                                                });
+                                                    });
+                                                }
                                             }
                                         }
                                     }
