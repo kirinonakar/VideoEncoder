@@ -1,0 +1,201 @@
+import { Button, LineEdit, Slider, HorizontalBox, VerticalBox, ProgressIndicator, ScrollView, CheckBox } from "std-widgets.slint";
+
+export component MainWindow inherits Window {
+    title: "VideoEncoder FFmpeg Wrapper";
+    min-width: 650px;
+    min-height: 550px;
+    background: #f5f5f7; // Soft Light Gray background
+
+    // Callbacks to Rust
+    callback select-ffmpeg-path();
+    callback select-output-folder();
+    callback reset-options();
+    callback start-encoding();
+    callback stop-encoding();
+    callback pick-files();
+    callback pick-folder();
+    callback clear-list();
+    
+    // Custom callback for D&D trigger from Rust
+    callback files-dropped(string);
+
+    // Properties from/to Rust
+    in-out property <string> ffmpeg-path: "";
+    in-out property <string> output-suffix: "_h265";
+    in-out property <float> crf-value: 19.0;
+    in-out property <string> output-folder: "";
+    in-out property <[string]> file-list: [];
+    in-out property <float> progress: 0.0;
+    in-out property <string> status-text: "준비 완료";
+    in-out property <bool> is-encoding: false;
+
+    VerticalBox {
+        padding: 24px;
+        spacing: 16px;
+
+        // Header
+        Text {
+            text: "VideoEncoder FFmpeg Wrapper";
+            font-size: 26px;
+            font-weight: 700;
+            color: #0071e3; // Apple blue accent
+            horizontal-alignment: center;
+        }
+
+        // Configuration Section
+        Rectangle {
+            background: #ffffff; // White card
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: #d2d2d7;
+            
+            VerticalLayout {
+                padding: 20px;
+                spacing: 12px;
+
+                HorizontalBox {
+                    spacing: 12px;
+                    Text { text: "FFmpeg 경로:"; color: #1d1d1f; vertical-alignment: center; width: 100px; font-weight: 500; }
+                    LineEdit {
+                        text <=> ffmpeg-path;
+                        placeholder-text: "ffmpeg.exe 경로를 지정하세요";
+                    }
+                    Button {
+                        text: "찾아보기";
+                        primary: false;
+                        clicked => { select-ffmpeg-path(); }
+                    }
+                }
+
+                HorizontalBox {
+                    spacing: 12px;
+                    Text { text: "출력 Suffix:"; color: #1d1d1f; vertical-alignment: center; width: 100px; font-weight: 500;}
+                    LineEdit {
+                        text <=> output-suffix;
+                    }
+                }
+
+                HorizontalBox {
+                    spacing: 12px;
+                    Text { text: "화질 (CRF):"; color: #1d1d1f; vertical-alignment: center; width: 100px; font-weight: 500; }
+                    Slider {
+                        minimum: 0;
+                        maximum: 51;
+                        value <=> crf-value;
+                    }
+                    Text { text: round(crf-value); color: #1d1d1f; vertical-alignment: center; width: 30px; }
+                }
+
+                HorizontalBox {
+                    spacing: 12px;
+                    Text { text: "출력 폴더:"; color: #1d1d1f; vertical-alignment: center; width: 100px; font-weight: 500; }
+                    LineEdit {
+                        text <=> output-folder;
+                        placeholder-text: "기본값: 원본과 동일";
+                    }
+                    Button {
+                        text: "선택";
+                        primary: false;
+                        clicked => { select-output-folder(); }
+                    }
+                }
+
+                HorizontalBox {
+                    alignment: start;
+                    Button {
+                        text: "옵션 초기화";
+                        clicked => { reset-options(); }
+                    }
+                }
+            }
+        }
+
+        // File List Section
+        Rectangle {
+            background: #ffffff;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: #d2d2d7;
+            
+            VerticalLayout {
+                padding: 16px;
+                spacing: 8px;
+                
+                HorizontalBox {
+                    Text { text: "인코딩 대기 목록 (" + file-list.length + ")"; color: #1d1d1f; font-weight: 600; vertical-alignment: center; }
+                    Rectangle {} // Spacer
+                    HorizontalBox {
+                        spacing: 8px;
+                        Button { text: "파일 추가"; clicked => { pick-files(); } }
+                        Button { text: "폴더 추가"; clicked => { pick-folder(); } }
+                        Button { text: "목록 비우기"; clicked => { clear-list(); } }
+                    }
+                }
+                
+                // Content area
+                Rectangle {
+                    height: 180px;
+                    background: #fbfbfd;
+                    border-radius: 6px;
+                    border-width: 1px;
+                    border-color: #e5e5e7;
+                    
+                    if (file-list.length == 0) : Text {
+                        text: "파일이나 폴더를 드래그해서 추가하세요";
+                        color: #86868b;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    ScrollView {
+                        VerticalBox {
+                            alignment: start;
+                            for file in file-list : Text {
+                                text: file;
+                                color: #1d1d1f;
+                                font-size: 13px;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Progress Section
+        VerticalBox {
+            spacing: 6px;
+            Text {
+                text: status-text;
+                color: #1d1d1f;
+                font-size: 14px;
+            }
+            ProgressIndicator {
+                progress: progress;
+                height: 8px;
+            }
+        }
+
+        // Controls Section
+        HorizontalBox {
+            spacing: 24px;
+            alignment: center;
+            
+            Button {
+                text: "변환 시작";
+                primary: true;
+                enabled: !is-encoding && file-list.length > 0;
+                clicked => { start-encoding(); }
+                height: 44px;
+                width: 180px;
+            }
+            
+            Button {
+                text: "중단";
+                enabled: is-encoding;
+                clicked => { stop-encoding(); }
+                height: 44px;
+                width: 180px;
+            }
+        }
+    }
+}

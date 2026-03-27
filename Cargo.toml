@@ -1,0 +1,17 @@
+[package]
+name = "VideoEncoder"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+slint = { version = "1.15.1", features = ["backend-winit", "raw-window-handle-06"] }
+rfd = "0.17.2"
+tokio = { version = "1.50.0", features = ["full"] }
+anyhow = "1.0.102"
+which = "8.0.2"
+regex = "1.12.3"
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Ole"] }
+raw-window-handle = "0.6"
+
+[build-dependencies]
+slint-build = "1.15.1"
