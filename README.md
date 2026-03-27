@@ -24,7 +24,7 @@ A sleek, high-performance video encoding GUI built with **Rust** and **Slint**. 
 ### 📥 Download
 You can download the latest version from the [Releases Page](https://github.com/kirinonakar/VideoEncoder/releases).
 
-### Installation
+### Manual build
 
 1.  Clone the repository:
     ```bash
