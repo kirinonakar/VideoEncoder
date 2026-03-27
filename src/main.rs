@@ -183,7 +183,7 @@ async fn main() -> Result<()> {
                 ui.set_output_suffix("_h265".into());
                 ui.set_crf_value(19.0);
                 ui.set_output_folder("".into());
-                ui.set_current_file_text("Options reset to default".into());
+
             }
         });
     }
