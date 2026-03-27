@@ -83,6 +83,14 @@ fn time_str_to_seconds(time_str: &str) -> f32 {
     0.0
 }
 
+fn seconds_to_hms(seconds: f32) -> String {
+    let total_s = seconds as i32;
+    let h = total_s / 3600;
+    let m = (total_s % 3600) / 60;
+    let s = total_s % 60;
+    format!("{:02}:{:02}:{:02}", h, m, s)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let main_window = MainWindow::new()?;
@@ -375,37 +383,46 @@ async fn main() -> Result<()> {
                                             let trimmed = line.trim();
                                             if trimmed.is_empty() { continue; }
 
-                                            // Parse Duration
                                             if total_duration == 0.0 {
                                                 if let Some(caps) = duration_re.captures(trimmed) {
                                                     total_duration = time_str_to_seconds(caps.get(1).unwrap().as_str());
                                                 }
                                             }
 
-                                            // Parse Bitrate
                                             if let Some(caps) = bitrate_re.captures(trimmed) {
                                                 cur_bitrate = caps.get(1).unwrap().as_str().to_string();
                                             }
 
-                                            // Parse Speed
                                             if let Some(caps) = speed_re.captures(trimmed) {
                                                 cur_speed = caps.get(1).unwrap().as_str().to_string();
                                             }
 
-                                            // Parse Time and Trigger UI Update
                                             if let Some(caps) = time_re.captures(trimmed) {
                                                 let current_time = time_str_to_seconds(caps.get(1).unwrap().as_str());
                                                 if total_duration > 0.0 {
                                                     let cur_pc = (current_time / total_duration).clamp(0.0, 1.0);
                                                     let overall_pc = file_base_progress + (cur_pc / total_files as f32);
                                                     
+                                                    let remaining_time = (total_duration - current_time).max(0.0);
+                                                    let time_info = format!("{}/{} ({} remaining)", 
+                                                        seconds_to_hms(current_time), 
+                                                        seconds_to_hms(total_duration), 
+                                                        seconds_to_hms(remaining_time));
+
+                                                    let mut full_status = if total_files > 1 {
+                                                        format!("Overall Progression: {:.1}%\n", overall_pc * 100.0)
+                                                    } else {
+                                                        String::new()
+                                                    };
+                                                    
+                                                    full_status.push_str(&format!("{}: {:.1}% ({}x, {})\n{}", base_msg, cur_pc * 100.0, cur_speed, cur_bitrate, time_info));
+
                                                     let _ = slint::invoke_from_event_loop({
                                                         let weak = weak_task.clone();
-                                                        let status = format!("{}\n{:.1}% ({}, {})", base_msg, cur_pc * 100.0, cur_speed, cur_bitrate);
                                                         move || {
                                                             if let Some(ui) = weak.upgrade() {
                                                                 ui.set_progress(overall_pc);
-                                                                ui.set_status_text(status.into());
+                                                                ui.set_status_text(full_status.into());
                                                             }
                                                         }
                                                     });

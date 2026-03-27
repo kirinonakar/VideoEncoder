@@ -169,7 +169,7 @@ export component MainWindow inherits Window {
         // Progress Section
         VerticalBox {
             spacing: 8px;
-            height: 55px; // Fixed height to prevent layout shift with multi-line status
+            height: 90px; // Increased height for multiple files overall progress + file progress + time
             Text {
                 text: status-text;
                 color: #1d1d1f;
