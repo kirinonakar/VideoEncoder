@@ -2,7 +2,7 @@
 
 A sleek, high-performance video encoding GUI built with **Rust** and **Slint**. This tool provides a modern interface for batch converting videos using **FFmpeg** with a focus on HEVC (H.265) encoding.
 
-![App Screenshot Placeholder](https://via.placeholder.com/800x450.png?text=VideoEncoder+UI+Screenshot)
+![App Screenshot Placeholder](screenshot.png)
 
 ## Key Features
 
@@ -15,18 +15,20 @@ A sleek, high-performance video encoding GUI built with **Rust** and **Slint**. 
 
 ## Prerequisite
 
--   **FFmpeg**: You need `ffmpeg.exe` installed on your system. 
+-   **[FFmpeg](https://ffmpeg.org/)**: You need `ffmpeg.exe` installed on your system. 
     -   The app will automatically look for `ffmpeg.exe` in its own directory.
     -   If not found, it will search your system `PATH`.
     -   You can also manually select the path within the app.
 
 ## Getting Started
+### 📥 Download
+You can download the latest version from the [Releases Page](https://github.com/kirinonakar/VideoEncoder/releases).
 
 ### Installation
 
 1.  Clone the repository:
     ```bash
-    git clone https://github.com/yourusername/VideoEncoder.git
+    git clone https://github.com/kirinonakar/VideoEncoder.git
     cd VideoEncoder
     ```
 2.  Ensure you have [Rust](https://www.rust-lang.org/tools/install) installed.
@@ -47,4 +49,5 @@ Contributions are welcome! Please feel free to submit a Pull Request or open an 
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
