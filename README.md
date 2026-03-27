@@ -2,7 +2,7 @@
 
 A sleek, high-performance video encoding GUI built with **Rust** and **Slint**. This tool provides a modern interface for batch converting videos using **FFmpeg** with a focus on HEVC (H.265) encoding.
 
-![App Screenshot Placeholder](screenshot.png)
+ <img src="screenshot.png" alt="screenshot1" width="50%">
 
 ## Key Features
 
