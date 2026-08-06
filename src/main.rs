@@ -259,28 +259,9 @@ impl FrameRequester {
         self.stop_playback();
         let id = self.stream_id.fetch_add(1, Ordering::SeqCst) + 1;
 
-        // 오디오 재생: ffplay 로 소리만 재생한다 (영상은 아래 ffmpeg 프레임 스트림이 담당).
-        // ffplay 를 찾지 못하면 조용히 소리 없이 재생을 계속한다.
-        let audio_on = match resolve_ffplay(&ffmpeg) {
-            Some(ffplay) => {
-                let mut acmd = Command::new(&ffplay);
-                #[cfg(windows)]
-                acmd.creation_flags(0x08000000);
-                acmd.args(["-nodisp", "-vn", "-autoexit", "-loglevel", "quiet", "-ss"])
-                    .arg(format!("{:.3}", t0))
-                    .arg("-i")
-                    .arg(&path)
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .stdin(Stdio::null());
-                match acmd.spawn() {
-                    Ok(c) => {
-                        *self.audio.lock().unwrap() = Some(c);
-                        true
-                    }
-                    Err(_) => false,
-                }
-            }
+        // ffplay(오디오 재생용) 경로를 미리 찾아둔다. 없으면 소리 없이 재생을 계속한다.
+        let ffplay = match resolve_ffplay(&ffmpeg) {
+            Some(p) => Some(p),
             None => {
                 if !FFPLAY_WARNED.swap(true, Ordering::SeqCst) {
                     let w = weak.clone();
@@ -290,7 +271,7 @@ impl FrameRequester {
                         }
                     });
                 }
-                false
+                None
             }
         };
 
@@ -338,30 +319,72 @@ impl FrameRequester {
         let w = weak.clone();
         tokio::spawn(async move {
             let fps = if fps > 0.5 { fps } else { 30.0 };
-            // 오디오(ffplay)가 준비될 때까지 잠시 기다렸다가 영상 프레임 표시를 시작해
-            // 재생 시작 시점의 A/V 싱크를 맞춘다.
-            if audio_on {
-                tokio::time::sleep(std::time::Duration::from_secs_f32(AUDIO_START_DELAY)).await;
+            // 1) 첫 프레임이 준비될 때까지 기다린다. ffmpeg 는 시크 지점(t0) 이전
+            //    키프레임부터 t0 까지 디코드해야 하므로, 재생 중간부터 시작하면 이
+            //    대기 시간이 길어진다. 이 시간 동안 오디오를 먼저 켜면 소리가 영상보다
+            //    앞서가므로, 영상 준비가 끝난 뒤에 오디오를 시작한다.
+            let mut first_frame: Option<Vec<u8>> = None;
+            let mut natural_end = false;
+            {
+                let mut buf = vec![0u8; frame_bytes];
+                match read_exact_or_eof(&mut stdout, &mut buf).await {
+                    Ok(true) => first_frame = Some(buf),
+                    Ok(false) | Err(_) => natural_end = true,
+                }
+            }
+
+            // 2) 영상이 준비된 시점에 오디오(ffplay)를 시작해 같은 시각(t0)에서 출발한다.
+            let mut audio_started = false;
+            if first_frame.is_some() {
+                if this.stream_id.load(Ordering::SeqCst) != id {
+                    return;
+                }
+                if let Some(ffplay) = ffplay {
+                    let mut acmd = Command::new(&ffplay);
+                    #[cfg(windows)]
+                    acmd.creation_flags(0x08000000);
+                    acmd.args(["-nodisp", "-vn", "-autoexit", "-loglevel", "quiet", "-ss"])
+                        .arg(format!("{:.3}", t0))
+                        .arg("-i")
+                        .arg(&path)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .stdin(Stdio::null());
+                    if let Ok(c) = acmd.spawn() {
+                        *this.audio.lock().unwrap() = Some(c);
+                        audio_started = true;
+                    }
+                }
+                // 3) 오디오 장치 초기화 시간만큼 기다렸다가 영상 표시를 시작한다 (A/V 싱크).
+                if audio_started {
+                    tokio::time::sleep(std::time::Duration::from_secs_f32(AUDIO_START_DELAY)).await;
+                }
                 if this.stream_id.load(Ordering::SeqCst) != id {
                     return;
                 }
             }
+
             let start_wall = Instant::now();
             let mut idx: u32 = 0;
-            let mut natural_end = false;
+            let mut pending = first_frame;
             loop {
                 if this.stream_id.load(Ordering::SeqCst) != id {
                     break;
                 }
-                let mut buf = vec![0u8; frame_bytes];
-                match read_exact_or_eof(&mut stdout, &mut buf).await {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        natural_end = true;
-                        break;
+                let buf = match pending.take() {
+                    Some(b) => b,
+                    None => {
+                        let mut b = vec![0u8; frame_bytes];
+                        match read_exact_or_eof(&mut stdout, &mut b).await {
+                            Ok(true) => b,
+                            Ok(false) => {
+                                natural_end = true;
+                                break;
+                            }
+                            Err(_) => break,
+                        }
                     }
-                    Err(_) => break,
-                }
+                };
                 let rel = idx as f32 / fps;
                 idx += 1;
                 let media_t = t0 + rel;
@@ -1525,7 +1548,11 @@ async fn main() -> Result<()> {
         });
     }
 
-    main_window.run()?;
+    let run_result = main_window.run();
+    // 창을 닫아 앱이 종료될 때 ffplay(소리)/ffmpeg(영상) 프로세스가 고아로 남아
+    // 소리가 계속 나지 않도록 재생 프로세스를 즉시 종료한다.
+    frame_requester.stop_playback();
+    run_result?;
     Ok(())
 }
 
