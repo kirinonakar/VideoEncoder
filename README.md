@@ -20,6 +20,10 @@ A sleek, high-performance video encoding GUI built with **Rust** and **Slint**. 
     -   The app will automatically look for `ffmpeg.exe` in its own directory.
     -   If not found, it will search your system `PATH`.
     -   You can also manually select the path within the app.
+-   **[FFplay](https://ffmpeg.org/)**: Required for **sound** in the video editor preview player.
+    -   Place `ffplay.exe` in the **same folder as `ffmpeg.exe`** (e.g., the app's own directory).
+    -   If not found there, the app falls back to searching your system `PATH`.
+    -   If `ffplay.exe` cannot be found at all, the preview plays **without sound**.
 
 ## Getting Started
 ### 📥 Download
