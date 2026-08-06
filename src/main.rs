@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, OnceLock};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use regex::Regex;
@@ -96,15 +96,56 @@ fn seconds_to_hms(seconds: f32) -> String {
 
 // --- Video Editor (Trim / Crop) Helpers ---
 
+/// 미리보기용 출력 해상도 (최대 너비 1280px, 짝수 크기 보장)
+fn preview_size(vw: f32, vh: f32) -> (u32, u32) {
+    if vw <= 0.0 || vh <= 0.0 {
+        return (1280, 720);
+    }
+    let mut w = vw.min(1280.0).max(2.0);
+    let mut h = (w * vh / vw).round().max(2.0);
+    w = (w / 2.0).floor() * 2.0;
+    h = (h / 2.0).floor() * 2.0;
+    (w as u32, h as u32)
+}
+
 struct FrameRequester {
-    busy: AtomicBool,
-    pending: std::sync::Mutex<Option<f32>>,
+    state: std::sync::Mutex<FrameState>,
+    stream: std::sync::Mutex<Option<tokio::process::Child>>,
+    stream_id: AtomicU64,
+}
+
+/// 프레임 요청 상태. busy/pending 을 하나의 락으로 관리해
+/// 마지막 요청이 유실되는 경쟁 조건(race)을 제거한다.
+struct FrameState {
+    busy: bool,
+    pending: Option<f32>,
 }
 
 impl FrameRequester {
-    fn request(self: &Arc<Self>, weak: slint::Weak<MainWindow>, ffmpeg: String, path: PathBuf, t: f32) {
-        if self.busy.swap(true, Ordering::SeqCst) {
-            *self.pending.lock().unwrap() = Some(t);
+    /// 단일 프레임 추출 요청 (시크/시작점·끝점 이동 시 사용).
+    /// 진행 중인 재생 스트림은 먼저 중단한다.
+    fn request(
+        self: &Arc<Self>,
+        weak: slint::Weak<MainWindow>,
+        ffmpeg: String,
+        path: PathBuf,
+        t: f32,
+        vw: f32,
+        vh: f32,
+    ) {
+        let (pw, ph) = preview_size(vw, vh);
+        self.stop_playback();
+        let should_spawn = {
+            let mut st = self.state.lock().unwrap();
+            if st.busy {
+                st.pending = Some(t);
+                false
+            } else {
+                st.busy = true;
+                true
+            }
+        };
+        if !should_spawn {
             return;
         }
         let this = self.clone();
@@ -112,16 +153,27 @@ impl FrameRequester {
         tokio::spawn(async move {
             let mut t = t;
             loop {
-                let res = extract_frame(&ffmpeg, &path, t)
+                let res = extract_frame(&ffmpeg, &path, t, pw, ph)
                     .await
-                    .and_then(|png| decode_png_rgba(&png));
-                let next = { this.pending.lock().unwrap().take() };
-                if next.is_none() {
-                    this.busy.store(false, Ordering::SeqCst);
-                }
+                    .map(|bytes| (bytes, pw, ph));
+                // pending 확인과 idle 전환을 같은 락 안에서 처리해
+                // "마지막 시크 위치가 표시되지 않는" 문제를 없앤다.
+                let next = {
+                    let mut st = this.state.lock().unwrap();
+                    let n = st.pending.take();
+                    if n.is_none() {
+                        st.busy = false;
+                    }
+                    n
+                };
                 let w2 = w.clone();
+                let this2 = this.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = w2.upgrade() {
+                        // 재생 스트림이 살아 있으면 스트림 프레임이 우선한다.
+                        if this2.stream.lock().unwrap().is_some() {
+                            return;
+                        }
                         match &res {
                             Ok((bytes, width, height)) => {
                                 let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
@@ -142,9 +194,148 @@ impl FrameRequester {
             }
         });
     }
+
+    /// 재생용 ffmpeg 프로세스를 종료한다.
+    fn stop_playback(self: &Arc<Self>) {
+        self.stream_id.fetch_add(1, Ordering::SeqCst);
+        let child = self.stream.lock().unwrap().take();
+        if let Some(mut child) = child {
+            let _ = child.start_kill();
+            tokio::spawn(async move {
+                let _ = child.wait().await;
+            });
+        }
+    }
+
+    /// ffmpeg 프로세스 하나로 프레임을 연속 수신하며 실시간 재생한다.
+    fn start_playback(
+        self: &Arc<Self>,
+        weak: slint::Weak<MainWindow>,
+        ffmpeg: String,
+        path: PathBuf,
+        t0: f32,
+        dur: f32,
+        fps: f32,
+        vw: f32,
+        vh: f32,
+    ) {
+        let (pw, ph) = preview_size(vw, vh);
+        let frame_bytes = (pw as usize) * (ph as usize) * 4;
+        self.stop_playback();
+        let id = self.stream_id.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut cmd = Command::new(&ffmpeg);
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
+        cmd.args(["-hide_banner", "-loglevel", "error", "-ss"])
+            .arg(format!("{:.3}", t0))
+            .arg("-i")
+            .arg(&path)
+            .args(["-an", "-sn", "-vf"])
+            .arg(format!("scale={}:{},setsar=1", pw, ph))
+            .args(["-vsync", "0", "-f", "rawvideo", "-pix_fmt", "rgba", "-y", "pipe:1"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null());
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                let w = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = w.upgrade() {
+                        ui.set_is_playing(false);
+                        ui.set_edit_status_text(format!("재생 시작 실패: {}", e).into());
+                    }
+                });
+                return;
+            }
+        };
+        let mut stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => {
+                let _ = child.start_kill();
+                let w = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = w.upgrade() {
+                        ui.set_is_playing(false);
+                    }
+                });
+                return;
+            }
+        };
+        *self.stream.lock().unwrap() = Some(child);
+        let this = self.clone();
+        let w = weak.clone();
+        tokio::spawn(async move {
+            let fps = if fps > 0.5 { fps } else { 30.0 };
+            let start_wall = Instant::now();
+            let mut idx: u32 = 0;
+            let mut natural_end = false;
+            loop {
+                if this.stream_id.load(Ordering::SeqCst) != id {
+                    break;
+                }
+                let mut buf = vec![0u8; frame_bytes];
+                match read_exact_or_eof(&mut stdout, &mut buf).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        natural_end = true;
+                        break;
+                    }
+                    Err(_) => break,
+                }
+                let rel = idx as f32 / fps;
+                idx += 1;
+                let media_t = t0 + rel;
+                if media_t > dur {
+                    natural_end = true;
+                    break;
+                }
+                // 실제 재생 속도에 맞춰 프레임 표시 시점을 조절한다 (실시간 재생).
+                let elapsed = start_wall.elapsed().as_secs_f32();
+                if rel > elapsed {
+                    tokio::time::sleep(std::time::Duration::from_secs_f32(rel - elapsed)).await;
+                }
+                if this.stream_id.load(Ordering::SeqCst) != id {
+                    break;
+                }
+                let w2 = w.clone();
+                let this2 = this.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if this2.stream_id.load(Ordering::SeqCst) != id {
+                        return;
+                    }
+                    if let Some(ui) = w2.upgrade() {
+                        let img = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                            &buf, pw, ph,
+                        );
+                        ui.set_video_image(slint::Image::from_rgba8(img));
+                        ui.set_preview_time(media_t);
+                        ui.set_time_preview_text(seconds_to_hms(media_t).into());
+                    }
+                });
+            }
+            // 자연 종료(영상 끝)면 프로세스를 정리하고 재생 상태를 해제한다.
+            if this.stream_id.load(Ordering::SeqCst) == id {
+                if let Some(mut child) = this.stream.lock().unwrap().take() {
+                    let _ = child.start_kill();
+                    tokio::spawn(async move {
+                        let _ = child.wait().await;
+                    });
+                }
+            }
+            if natural_end {
+                let w2 = w.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = w2.upgrade() {
+                        ui.set_is_playing(false);
+                    }
+                });
+            }
+        });
+    }
 }
 
-async fn probe_video(ffmpeg: &str, path: &Path) -> anyhow::Result<(f32, f32, f32)> {
+async fn probe_video(ffmpeg: &str, path: &Path) -> anyhow::Result<(f32, f32, f32, f32)> {
     let mut cmd = Command::new(ffmpeg);
     #[cfg(windows)]
     cmd.creation_flags(0x08000000);
@@ -158,6 +349,7 @@ async fn probe_video(ffmpeg: &str, path: &Path) -> anyhow::Result<(f32, f32, f32
     let stderr = String::from_utf8_lossy(&out.stderr);
     let dur_re = Regex::new(r"Duration:\s*(\d{2,}:\d{2}:\d{2}\.\d+)").unwrap();
     let res_re = Regex::new(r"Video:.*?(\d{2,5})x(\d{2,5})").unwrap();
+    let fps_re = Regex::new(r"(\d+(?:\.\d+)?)\s*fps").unwrap();
     let duration = dur_re
         .captures(&stderr)
         .and_then(|c| c.get(1))
@@ -172,10 +364,15 @@ async fn probe_video(ffmpeg: &str, path: &Path) -> anyhow::Result<(f32, f32, f32
             )
         })
         .unwrap_or((0.0, 0.0));
-    Ok((duration, w, h))
+    let fps = fps_re
+        .captures(&stderr)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().parse::<f32>().unwrap_or(30.0))
+        .unwrap_or(30.0);
+    Ok((duration, w, h, fps))
 }
 
-async fn extract_frame(ffmpeg: &str, path: &Path, t: f32) -> anyhow::Result<Vec<u8>> {
+async fn extract_frame(ffmpeg: &str, path: &Path, t: f32, pw: u32, ph: u32) -> anyhow::Result<Vec<u8>> {
     let mut cmd = Command::new(ffmpeg);
     #[cfg(windows)]
     cmd.creation_flags(0x08000000);
@@ -187,7 +384,9 @@ async fn extract_frame(ffmpeg: &str, path: &Path, t: f32) -> anyhow::Result<Vec<
         // 출력 옵션으로 -ss 를 한 번 더 지정: 키프레임 대신 정확한 시간의 프레임 추출
         .arg("-ss")
         .arg(format!("{:.3}", t))
-        .args(["-frames:v", "1", "-an", "-f", "image2pipe", "-vcodec", "png", "-y", "pipe:1"])
+        .args(["-vf"])
+        .arg(format!("scale={}:{},setsar=1", pw, ph))
+        .args(["-frames:v", "1", "-an", "-f", "rawvideo", "-pix_fmt", "rgba", "-y", "pipe:1"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null())
@@ -200,11 +399,17 @@ async fn extract_frame(ffmpeg: &str, path: &Path, t: f32) -> anyhow::Result<Vec<
     Ok(out.stdout)
 }
 
-fn decode_png_rgba(png: &[u8]) -> anyhow::Result<(Vec<u8>, u32, u32)> {
-    let img = image::load_from_memory(png)?;
-    let rgba = img.to_rgba8();
-    let (w, h) = (rgba.width(), rgba.height());
-    Ok((rgba.into_raw(), w, h))
+/// 버퍼를 끝까지 채울 때까지 읽는다. EOF 이면 false 를 반환한다.
+async fn read_exact_or_eof(reader: &mut (impl tokio::io::AsyncRead + Unpin), buf: &mut [u8]) -> std::io::Result<bool> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        match reader.read(&mut buf[filled..]).await {
+            Ok(0) => return Ok(false),
+            Ok(n) => filled += n,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(true)
 }
 
 /// Watches ffmpeg stderr for progress. Returns success.
@@ -750,10 +955,10 @@ async fn main() -> Result<()> {
     }
 
     // === Video Editor (Trim / Crop) Callbacks ===
-    let play_timer = Rc::new(slint::Timer::default());
     let frame_requester = Arc::new(FrameRequester {
-        busy: AtomicBool::new(false),
-        pending: std::sync::Mutex::new(None),
+        state: std::sync::Mutex::new(FrameState { busy: false, pending: None }),
+        stream: std::sync::Mutex::new(None),
+        stream_id: AtomicU64::new(0),
     });
 
     fn load_video_async(
@@ -762,6 +967,7 @@ async fn main() -> Result<()> {
         ffmpeg: String,
         path: PathBuf,
     ) {
+        requester.stop_playback();
         let weak = ui_weak.clone();
         tokio::spawn(async move {
             let res = probe_video(&ffmpeg, &path).await;
@@ -769,8 +975,9 @@ async fn main() -> Result<()> {
                 if let Some(ui) = weak.upgrade() {
                     ui.set_is_playing(false);
                     match res {
-                        Ok((dur, w, h)) => {
+                        Ok((dur, w, h, fps)) => {
                             ui.set_video_duration(dur);
+                            ui.set_video_fps(fps);
                             ui.set_video_width(w);
                             ui.set_video_height(h);
                             ui.set_video_loaded(true);
@@ -796,7 +1003,14 @@ async fn main() -> Result<()> {
                             );
                             ui.set_crop_info_text(format!("크롭 영역: 전체 ({}x{})", w as i32, h as i32).into());
                             ui.set_edit_status_text("비디오를 불러왔습니다. 타임라인에서 구간을 선택하고 크롭 영역을 지정하세요.".into());
-                            requester.request(weak.clone(), ffmpeg.clone(), path.clone(), 0.0);
+                            requester.request(
+                                weak.clone(),
+                                ffmpeg.clone(),
+                                path.clone(),
+                                0.0,
+                                ui.get_video_width(),
+                                ui.get_video_height(),
+                            );
                         }
                         Err(e) => {
                             ui.set_video_loaded(false);
@@ -922,14 +1136,19 @@ async fn main() -> Result<()> {
         main_window.on_seek_time(move |t| {
             if let Some(ui) = weak.upgrade() {
                 let dur = ui.get_video_duration();
-                let t = t.clamp(0.0, dur);
+                // 영상 끝(EOF)에서는 프레임 추출이 실패하므로 살짝 앞으로 당긴다.
+                let t = t.clamp(0.0, (dur - 0.05).max(0.0));
                 ui.set_preview_time(t);
                 ui.set_time_preview_text(seconds_to_hms(t).into());
                 if ui.get_video_loaded() {
+                    if ui.get_is_playing() {
+                        // 시크(스크럽) 중에는 재생을 일시정지한다.
+                        ui.set_is_playing(false);
+                    }
                     let ffmpeg = ui.get_ffmpeg_path().to_string();
                     if !ffmpeg.is_empty() {
                         let path = PathBuf::from(ui.get_current_video_path().to_string());
-                        requester.request(weak.clone(), ffmpeg, path, t);
+                        requester.request(weak.clone(), ffmpeg, path, t, ui.get_video_width(), ui.get_video_height());
                     }
                 }
             }
@@ -987,45 +1206,36 @@ async fn main() -> Result<()> {
         });
     }
 
-    // Play / Pause
+    // Play / Pause (ffmpeg 스트림 실시간 재생)
     {
         let weak = ui_weak.clone();
-        let timer = play_timer.clone();
         let requester = frame_requester.clone();
         main_window.on_toggle_play(move || {
             if let Some(ui) = weak.upgrade() {
                 if ui.get_is_playing() {
-                    timer.stop();
+                    requester.stop_playback();
                     ui.set_is_playing(false);
-                } else {
-                    if !ui.get_video_loaded() { return; }
-                    ui.set_is_playing(true);
-                    let w = weak.clone();
-                    let ffmpeg = ui.get_ffmpeg_path().to_string();
-                    let path = PathBuf::from(ui.get_current_video_path().to_string());
-                    let rq = requester.clone();
-                    let timer2 = timer.clone();
-                    timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(200), move || {
-                        if let Some(ui) = w.upgrade() {
-                            if !ui.get_is_playing() {
-                                timer2.stop();
-                                return;
-                            }
-                            let t = ui.get_preview_time() + 0.2;
-                            let dur = ui.get_video_duration();
-                            if t >= dur {
-                                ui.set_preview_time(dur);
-                                ui.set_time_preview_text(seconds_to_hms(dur).into());
-                                ui.set_is_playing(false);
-                                timer2.stop();
-                            } else {
-                                ui.set_preview_time(t);
-                                ui.set_time_preview_text(seconds_to_hms(t).into());
-                                rq.request(w.clone(), ffmpeg.clone(), path.clone(), t);
-                            }
-                        }
-                    });
+                    return;
                 }
+                if !ui.get_video_loaded() {
+                    return;
+                }
+                let dur = ui.get_video_duration();
+                let mut t = ui.get_preview_time();
+                if t >= dur - 0.05 {
+                    // 영상 끝에 있으면 선택 구간의 시작부터 다시 재생한다.
+                    t = ui.get_trim_start();
+                }
+                ui.set_preview_time(t);
+                ui.set_time_preview_text(seconds_to_hms(t).into());
+                let ffmpeg = ui.get_ffmpeg_path().to_string();
+                if ffmpeg.is_empty() {
+                    return;
+                }
+                let path = PathBuf::from(ui.get_current_video_path().to_string());
+                let fps = ui.get_video_fps();
+                ui.set_is_playing(true);
+                requester.start_playback(weak.clone(), ffmpeg, path, t, dur, fps, ui.get_video_width(), ui.get_video_height());
             }
         });
     }
@@ -1033,11 +1243,10 @@ async fn main() -> Result<()> {
     // Reset edit options
     {
         let weak = ui_weak.clone();
-        let timer = play_timer.clone();
         let requester = frame_requester.clone();
         main_window.on_reset_edit(move || {
             if let Some(ui) = weak.upgrade() {
-                timer.stop();
+                requester.stop_playback();
                 ui.set_is_playing(false);
                 let dur = ui.get_video_duration();
                 ui.set_preview_time(0.0);
@@ -1057,7 +1266,7 @@ async fn main() -> Result<()> {
                     let ffmpeg = ui.get_ffmpeg_path().to_string();
                     if !ffmpeg.is_empty() {
                         let path = PathBuf::from(ui.get_current_video_path().to_string());
-                        requester.request(weak.clone(), ffmpeg, path, 0.0);
+                        requester.request(weak.clone(), ffmpeg, path, 0.0, ui.get_video_width(), ui.get_video_height());
                     }
                 }
                 ui.set_edit_status_text("편집 옵션을 초기화했습니다.".into());
@@ -1068,10 +1277,10 @@ async fn main() -> Result<()> {
     // Run Cut (no re-encode)
     {
         let weak = ui_weak.clone();
-        let timer = play_timer.clone();
+        let requester = frame_requester.clone();
         main_window.on_run_cut(move || {
             if let Some(ui) = weak.upgrade() {
-                timer.stop();
+                requester.stop_playback();
                 ui.set_is_playing(false);
                 let ffmpeg = ui.get_ffmpeg_path().to_string();
                 if ffmpeg.is_empty() {
@@ -1104,10 +1313,10 @@ async fn main() -> Result<()> {
     // Run Crop + Cut (re-encode)
     {
         let weak = ui_weak.clone();
-        let timer = play_timer.clone();
+        let requester = frame_requester.clone();
         main_window.on_run_crop(move || {
             if let Some(ui) = weak.upgrade() {
-                timer.stop();
+                requester.stop_playback();
                 ui.set_is_playing(false);
                 let ffmpeg = ui.get_ffmpeg_path().to_string();
                 if ffmpeg.is_empty() {
