@@ -166,12 +166,18 @@ impl FrameRequester {
                     }
                     n
                 };
+                let frame_t = t;
                 let w2 = w.clone();
                 let this2 = this.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = w2.upgrade() {
                         // 재생 스트림이 살아 있으면 스트림 프레임이 우선한다.
                         if this2.stream.lock().unwrap().is_some() {
+                            return;
+                        }
+                        // 마커/타임라인을 계속 움직여 최신 시크 위치와 다르다면
+                        // 낡은 프레임을 표시하지 않는다.
+                        if (ui.get_preview_time() - frame_t).abs() > 0.1 {
                             return;
                         }
                         match &res {
@@ -381,9 +387,8 @@ async fn extract_frame(ffmpeg: &str, path: &Path, t: f32, pw: u32, ph: u32) -> a
         .arg(format!("{:.3}", t))
         .arg("-i")
         .arg(path)
-        // 출력 옵션으로 -ss 를 한 번 더 지정: 키프레임 대신 정확한 시간의 프레임 추출
-        .arg("-ss")
-        .arg(format!("{:.3}", t))
+        // 입력 -ss(정확한 시크)만 사용한다. 입력+출력 이중 -ss 는 ffmpeg 8.x 에서
+        // 출력 -ss 가 입력 시크 지점을 기준으로 적용되어 출력이 비어 추출이 실패한다.
         .args(["-vf"])
         .arg(format!("scale={}:{},setsar=1", pw, ph))
         .args(["-frames:v", "1", "-an", "-f", "rawvideo", "-pix_fmt", "rgba", "-y", "pipe:1"])

@@ -11,6 +11,7 @@ A sleek, high-performance video encoding GUI built with **Rust** and **Slint**. 
 -   **HEVC (H.265) Optimization**: Default configurations tailored for high-quality, low-size H.265 encoding.
 -   **Detailed Progress Tracking**: Real-time parsing of FFmpeg logs to show per-file percentage, encoding speed (x speed), and live bitrate.
 -   **Batch Processing**: Queue multiple files and folders for sequential encoding.
+-   **Video Editor (Trim / Cut / Crop)**: Built-in preview player with frame scrubbing, lossless cutting (`-c copy`), and an interactive crop overlay with HEVC re-encoding.
 -   **Customizable Options**: Easy adjustment of CRF (Quality), output suffix, and target directory.
 
 ## Prerequisite
@@ -36,6 +37,16 @@ You can download the latest version from the [Releases Page](https://github.com/
     ```bash
     cargo run --release
     ```
+
+## Video Editor (Trim / Cut / Crop)
+
+The app includes a lightweight video editor for quick trimming and cropping right in the main window.
+
+-   **Preview Player**: Load a video to scrub through frames (frame extraction via FFmpeg) and preview the crop area in real time.
+-   **Trim / Cut**: Set the start/end points with the timeline sliders or the *Mark Start / Mark End* buttons (minimum 0.05s). Cutting runs FFmpeg with `-ss`/`-t` and stream copy (`-c copy`), so it is **lossless and instant** — no re-encoding. Output: `{name}_cut.{ext}`.
+-   **Crop**: Drag or resize the crop overlay directly on the preview. The selected region is applied via the FFmpeg `crop` filter and **re-encoded to HEVC (H.265)** with the configured CRF (medium preset); the audio track is copied untouched. Output: `{name}_crop.mp4`.
+-   **Smart Fallback**: If the crop region covers the whole frame, the app automatically runs a lossless cut instead of re-encoding.
+-   **Live Feedback**: The crop coordinates (x, y, width, height) and output resolution are shown in real time, with a progress bar and status messages for both cut and crop jobs.
 
 ## Technical Implementation Highlights
 
