@@ -381,36 +381,6 @@ async fn main() -> Result<()> {
 
     // --- Callbacks ---
 
-    // Handle files dropped via hook
-    {
-        let model = files_model.clone();
-        let weak = ui_weak.clone();
-        main_window.on_files_dropped(move |paths_str| {
-            let paths: Vec<&str> = paths_str.split('|').collect();
-            let mut added = 0;
-            for p_str in paths {
-                let path = PathBuf::from(p_str);
-                if path.is_dir() {
-                    if let Ok(entries) = std::fs::read_dir(&path) {
-                        for entry in entries.flatten() {
-                            let p = entry.path();
-                            if is_video_file(&p) {
-                                model.push(p.to_string_lossy().to_string().into());
-                                added += 1;
-                            }
-                        }
-                    }
-                } else if is_video_file(&path) {
-                    model.push(path.to_string_lossy().to_string().into());
-                    added += 1;
-                }
-            }
-            if let Some(ui) = weak.upgrade() {
-                ui.set_current_file_text(format!("{} items added", added).into());
-            }
-        });
-    }
-
     // Select FFmpeg Path
     {
         let weak = ui_weak.clone();
@@ -832,6 +802,55 @@ async fn main() -> Result<()> {
                     }
                 }
             });
+        });
+    }
+
+    // Handle files dropped via hook (auto-open the first video in the editor)
+    {
+        let model = files_model.clone();
+        let weak = ui_weak.clone();
+        let requester = frame_requester.clone();
+        main_window.on_files_dropped(move |paths_str| {
+            let paths: Vec<&str> = paths_str.split('|').collect();
+            let mut added = 0;
+            let mut first_video: Option<(PathBuf, usize)> = None;
+            for p_str in paths {
+                let path = PathBuf::from(p_str);
+                if path.is_dir() {
+                    if let Ok(entries) = std::fs::read_dir(&path) {
+                        for entry in entries.flatten() {
+                            let p = entry.path();
+                            if is_video_file(&p) {
+                                if first_video.is_none() {
+                                    first_video = Some((p.clone(), model.row_count()));
+                                }
+                                model.push(p.to_string_lossy().to_string().into());
+                                added += 1;
+                            }
+                        }
+                    }
+                } else if is_video_file(&path) {
+                    if first_video.is_none() {
+                        first_video = Some((path.clone(), model.row_count()));
+                    }
+                    model.push(path.to_string_lossy().to_string().into());
+                    added += 1;
+                }
+            }
+            if let Some(ui) = weak.upgrade() {
+                ui.set_current_file_text(format!("{} items added", added).into());
+                if let Some((p, idx)) = first_video {
+                    let ffmpeg = ui.get_ffmpeg_path().to_string();
+                    if ffmpeg.is_empty() {
+                        ui.set_edit_status_text("먼저 FFmpeg 경로를 설정하세요.".into());
+                    } else {
+                        ui.set_current_video_path(p.to_string_lossy().to_string().into());
+                        ui.set_selected_index(idx as i32);
+                        ui.set_edit_status_text("비디오 정보를 읽는 중...".into());
+                        load_video_async(weak.clone(), requester.clone(), ffmpeg, p);
+                    }
+                }
+            }
         });
     }
 
