@@ -1079,6 +1079,7 @@ async fn main() -> Result<()> {
     // Pick video file
     {
         let weak = ui_weak.clone();
+        let model = files_model.clone();
         let requester = frame_requester.clone();
         main_window.on_pick_video(move || {
             if let Some(ui) = weak.upgrade() {
@@ -1091,7 +1092,22 @@ async fn main() -> Result<()> {
                         ui.set_edit_status_text("먼저 FFmpeg 경로를 설정하세요.".into());
                         return;
                     }
-                    ui.set_current_video_path(path.to_string_lossy().to_string().into());
+                    // 목록에 이미 있으면 해당 항목을, 없으면 새로 추가한 뒤 선택해 연다.
+                    let path_str = path.to_string_lossy().to_string();
+                    let mut idx = -1;
+                    for i in 0..model.row_count() {
+                        if model.row_data(i).as_deref() == Some(path_str.as_str()) {
+                            idx = i as i32;
+                            break;
+                        }
+                    }
+                    if idx < 0 {
+                        model.push(path_str.clone().into());
+                        idx = (model.row_count() - 1) as i32;
+                    }
+                    ui.set_selected_index(idx);
+                    ui.set_current_file_text(format!("{} files in list", model.row_count()).into());
+                    ui.set_current_video_path(path_str.into());
                     ui.set_edit_status_text("비디오 정보를 읽는 중...".into());
                     load_video_async(weak.clone(), requester.clone(), ffmpeg, path);
                 }
