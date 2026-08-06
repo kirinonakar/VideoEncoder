@@ -693,7 +693,7 @@ export component MainWindow inherits Window {
                         spacing: 8px;
                         Button { text: "시작점 ← 현재"; enabled: video-loaded && !edit-busy; clicked => { mark-trim-start(); } }
                         Button { text: "끝점 ← 현재"; enabled: video-loaded && !edit-busy; clicked => { mark-trim-end(); } }
-                        Button { text: is-playing ? "일시정지" : "재생"; enabled: video-loaded && !edit-busy; clicked => { toggle-play(); } }
+                        Button { text: is-playing ? "⏸" : "▶"; enabled: video-loaded && !edit-busy; clicked => { toggle-play(); } }
                         Button { text: "편집 초기화"; enabled: video-loaded && !edit-busy; clicked => { reset-edit(); } }
                     }
 
