@@ -131,8 +131,113 @@ struct FrameRequester {
     state: std::sync::Mutex<FrameState>,
     stream: std::sync::Mutex<Option<tokio::process::Child>>,
     stream_id: AtomicU64,
-    /// 오디오 재생용 ffplay 프로세스 (영상 프레임 스트림과 병렬로 재생)
-    audio: std::sync::Mutex<Option<tokio::process::Child>>,
+    /// 오디오 디코더와 재생용 ffplay 프로세스
+    audio: std::sync::Mutex<Option<AudioPlayback>>,
+}
+
+/// ffmpeg가 시작 위치부터 디코드한 WAV 오디오를 ffplay로 전달하는 파이프라인.
+struct AudioPlayback {
+    decoder: tokio::process::Child,
+    player: tokio::process::Child,
+}
+
+struct AudioPipes {
+    playback: AudioPlayback,
+    decoder_stdout: tokio::process::ChildStdout,
+    player_stdin: tokio::process::ChildStdin,
+}
+
+/// 오디오 파이프라인의 두 프로세스를 종료하고 핸들을 회수한다.
+fn kill_audio_playback(mut playback: AudioPlayback) {
+    let _ = playback.decoder.start_kill();
+    let _ = playback.player.start_kill();
+    tokio::spawn(async move {
+        let _ = playback.decoder.wait().await;
+        let _ = playback.player.wait().await;
+    });
+}
+
+/// ffplay 자체의 -ss는 일부 파일에서 오디오 디코더를 파일 시작점에서
+/// 열어 둔 채 seek 상태만 바꾸므로, 오디오도 ffmpeg에서 먼저 seek한 PCM으로
+/// 만들어 ffplay의 stdin으로 전달한다. 이렇게 하면 오디오의 첫 샘플이 항상 t0이다.
+fn spawn_audio_playback(
+    ffmpeg: &str,
+    ffplay: &str,
+    path: &Path,
+    t0: f32,
+) -> anyhow::Result<AudioPipes> {
+    let mut decoder_cmd = Command::new(ffmpeg);
+    #[cfg(windows)]
+    decoder_cmd.creation_flags(0x08000000);
+    decoder_cmd
+        .args(["-hide_banner", "-loglevel", "error", "-ss"])
+        .arg(format!("{:.3}", t0))
+        .arg("-i")
+        .arg(path)
+        .args([
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-sn",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-c:a",
+            "pcm_s16le",
+            "-f",
+            "wav",
+            "pipe:1",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .stdin(Stdio::null());
+    let mut decoder = decoder_cmd.spawn()?;
+    let decoder_stdout = decoder
+        .stdout
+        .take()
+        .ok_or_else(|| {
+            let _ = decoder.start_kill();
+            anyhow::anyhow!("오디오 디코더 출력 파이프를 열 수 없습니다")
+        })?;
+
+    let mut player_cmd = Command::new(ffplay);
+    #[cfg(windows)]
+    player_cmd.creation_flags(0x08000000);
+    player_cmd
+        .args([
+            "-nodisp",
+            "-vn",
+            "-autoexit",
+            "-loglevel",
+            "quiet",
+            "-i",
+            "pipe:0",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut player = match player_cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            let _ = decoder.start_kill();
+            return Err(e.into());
+        }
+    };
+    let player_stdin = match player.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            let _ = decoder.start_kill();
+            let _ = player.start_kill();
+            return Err(anyhow::anyhow!("ffplay 입력 파이프를 열 수 없습니다"));
+        }
+    };
+
+    Ok(AudioPipes {
+        playback: AudioPlayback { decoder, player },
+        decoder_stdout,
+        player_stdin,
+    })
 }
 
 /// 프레임 요청 상태. busy/pending 을 하나의 락으로 관리해
@@ -233,12 +338,8 @@ impl FrameRequester {
             });
         }
         // 오디오(ffplay) 프로세스도 함께 종료한다.
-        let audio = self.audio.lock().unwrap().take();
-        if let Some(mut audio) = audio {
-            let _ = audio.start_kill();
-            tokio::spawn(async move {
-                let _ = audio.wait().await;
-            });
+        if let Some(audio) = self.audio.lock().unwrap().take() {
+            kill_audio_playback(audio);
         }
     }
 
@@ -333,25 +434,31 @@ impl FrameRequester {
                 }
             }
 
-            // 2) 영상이 준비된 시점에 오디오(ffplay)를 시작해 같은 시각(t0)에서 출발한다.
+            // 2) 영상이 준비된 시점에 t0부터 디코드한 오디오를 시작해 같은 시각에서 출발한다.
             let mut audio_started = false;
             if first_frame.is_some() {
                 if this.stream_id.load(Ordering::SeqCst) != id {
                     return;
                 }
                 if let Some(ffplay) = ffplay {
-                    let mut acmd = Command::new(&ffplay);
-                    #[cfg(windows)]
-                    acmd.creation_flags(0x08000000);
-                    acmd.args(["-nodisp", "-vn", "-autoexit", "-loglevel", "quiet", "-ss"])
-                        .arg(format!("{:.3}", t0))
-                        .arg("-i")
-                        .arg(&path)
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::null())
-                        .stdin(Stdio::null());
-                    if let Ok(c) = acmd.spawn() {
-                        *this.audio.lock().unwrap() = Some(c);
+                    if let Ok(mut pipes) = spawn_audio_playback(&ffmpeg, &ffplay, &path, t0) {
+                        // stop_playback()와 오디오 생성이 겹쳐도 새 프로세스가 고아로
+                        // 남지 않도록 먼저 슬롯에 넣고, 직후 세대 번호를 다시 확인한다.
+                        let stale_before_install = this.stream_id.load(Ordering::SeqCst) != id;
+                        if stale_before_install {
+                            kill_audio_playback(pipes.playback);
+                            return;
+                        }
+                        *this.audio.lock().unwrap() = Some(pipes.playback);
+                        if this.stream_id.load(Ordering::SeqCst) != id {
+                            if let Some(audio) = this.audio.lock().unwrap().take() {
+                                kill_audio_playback(audio);
+                            }
+                            return;
+                        }
+                        tokio::spawn(async move {
+                            let _ = tokio::io::copy(&mut pipes.decoder_stdout, &mut pipes.player_stdin).await;
+                        });
                         audio_started = true;
                     }
                 }
@@ -425,11 +532,8 @@ impl FrameRequester {
                     });
                 }
                 // 오디오(ffplay)도 함께 종료한다.
-                if let Some(mut audio) = this.audio.lock().unwrap().take() {
-                    let _ = audio.start_kill();
-                    tokio::spawn(async move {
-                        let _ = audio.wait().await;
-                    });
+                if let Some(audio) = this.audio.lock().unwrap().take() {
+                    kill_audio_playback(audio);
                 }
             }
             if natural_end {
