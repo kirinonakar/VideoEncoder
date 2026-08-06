@@ -591,6 +591,7 @@ export component MainWindow inherits Window {
                             pointer-event(ev) => {
                                 if (ev.kind == PointerEventKind.down) {
                                     tl-dragging = true;
+                                    seek-time(clamp(self.mouse-x / tl-w * video-duration, 0.0, video-duration));
                                 } else if (ev.kind == PointerEventKind.up) {
                                     tl-dragging = false;
                                 } else if (ev.kind == PointerEventKind.move && tl-dragging) {
