@@ -184,6 +184,9 @@ async fn extract_frame(ffmpeg: &str, path: &Path, t: f32) -> anyhow::Result<Vec<
         .arg(format!("{:.3}", t))
         .arg("-i")
         .arg(path)
+        // 출력 옵션으로 -ss 를 한 번 더 지정: 키프레임 대신 정확한 시간의 프레임 추출
+        .arg("-ss")
+        .arg(format!("{:.3}", t))
         .args(["-frames:v", "1", "-an", "-f", "image2pipe", "-vcodec", "png", "-y", "pipe:1"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -926,8 +929,7 @@ async fn main() -> Result<()> {
                     let ffmpeg = ui.get_ffmpeg_path().to_string();
                     if !ffmpeg.is_empty() {
                         let path = PathBuf::from(ui.get_current_video_path().to_string());
-                        let t2 = (t - 0.05).max(0.0);
-                        requester.request(weak.clone(), ffmpeg, path, t2);
+                        requester.request(weak.clone(), ffmpeg, path, t);
                     }
                 }
             }
@@ -1003,13 +1005,13 @@ async fn main() -> Result<()> {
                     let path = PathBuf::from(ui.get_current_video_path().to_string());
                     let rq = requester.clone();
                     let timer2 = timer.clone();
-                    timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(500), move || {
+                    timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(200), move || {
                         if let Some(ui) = w.upgrade() {
                             if !ui.get_is_playing() {
                                 timer2.stop();
                                 return;
                             }
-                            let t = ui.get_preview_time() + 0.5;
+                            let t = ui.get_preview_time() + 0.2;
                             let dur = ui.get_video_duration();
                             if t >= dur {
                                 ui.set_preview_time(dur);

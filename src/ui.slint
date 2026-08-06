@@ -389,19 +389,13 @@ export component MainWindow inherits Window {
 
                                 property <float> drag-orig-x: 0.0;
                                 property <float> drag-orig-y: 0.0;
-                                // Corner drag origin snapshots
-                                property <float> tl-orig-x: 0.0;
-                                property <float> tl-orig-y: 0.0;
-                                property <float> tl-orig-r: 1.0;
-                                property <float> tl-orig-b: 1.0;
-                                property <float> tr-orig-y: 0.0;
-                                property <float> tr-orig-b: 1.0;
-                                property <float> tr-orig-w: 1.0;
-                                property <float> bl-orig-x: 0.0;
-                                property <float> bl-orig-r: 1.0;
-                                property <float> bl-orig-h: 1.0;
-                                property <float> br-orig-w: 1.0;
-                                property <float> br-orig-h: 1.0;
+                                // Edge drag origin snapshots
+                                property <float> top-orig-y: 0.0;
+                                property <float> top-orig-b: 1.0;
+                                property <float> bot-orig-h: 1.0;
+                                property <float> left-orig-x: 0.0;
+                                property <float> left-orig-r: 1.0;
+                                property <float> right-orig-w: 1.0;
 
                                 // Drag to move the crop area
                                 TouchArea {
@@ -417,108 +411,116 @@ export component MainWindow inherits Window {
                                     }
                                 }
 
-                                // Top-left corner handle
+                                // Top edge handle (세로 크기 조절)
                                 Rectangle {
                                     x: 0px;
-                                    y: 0px;
-                                    width: 20px;
-                                    height: 20px;
-                                    background: #ff3b30;
-                                    border-radius: 10px;
-                                    border-width: 2px;
-                                    border-color: #ffffff;
+                                    y: -5px;
+                                    width: 100%;
+                                    height: 10px;
+                                    background: #ff3b3014;
+
+                                    Rectangle {
+                                        y: 4px;
+                                        width: 100%;
+                                        height: 2px;
+                                        background: #ff3b30;
+                                    }
 
                                     TouchArea {
+                                        mouse-cursor: ns-resize;
                                         pointer-event(ev) => {
                                             if (ev.kind == PointerEventKind.down) {
-                                                tl-orig-x = crop-x;
-                                                tl-orig-y = crop-y;
-                                                tl-orig-r = crop-x + crop-w;
-                                                tl-orig-b = crop-y + crop-h;
+                                                top-orig-y = crop-y;
+                                                top-orig-b = crop-y + crop-h;
                                             } else if (ev.kind == PointerEventKind.move && self.pressed) {
-                                                crop-x = clamp(tl-orig-x + (self.mouse-x - self.pressed-x) / preview-area.disp-w, 0.0, max(0.0, tl-orig-r - 0.05));
-                                                crop-y = clamp(tl-orig-y + (self.mouse-y - self.pressed-y) / preview-area.disp-h, 0.0, max(0.0, tl-orig-b - 0.05));
-                                                crop-w = tl-orig-r - crop-x;
-                                                crop-h = tl-orig-b - crop-y;
+                                                crop-y = clamp(top-orig-y + (self.mouse-y - self.pressed-y) / preview-area.disp-h, 0.0, max(0.0, top-orig-b - 0.05));
+                                                crop-h = top-orig-b - crop-y;
                                                 crop-changed();
                                             }
                                         }
                                     }
                                 }
 
-                                // Top-right corner handle
-                                Rectangle {
-                                    x: parent.width - 20px;
-                                    y: 0px;
-                                    width: 20px;
-                                    height: 20px;
-                                    background: #ff3b30;
-                                    border-radius: 10px;
-                                    border-width: 2px;
-                                    border-color: #ffffff;
-
-                                    TouchArea {
-                                        pointer-event(ev) => {
-                                            if (ev.kind == PointerEventKind.down) {
-                                                tr-orig-y = crop-y;
-                                                tr-orig-b = crop-y + crop-h;
-                                                tr-orig-w = crop-w;
-                                            } else if (ev.kind == PointerEventKind.move && self.pressed) {
-                                                crop-w = clamp(tr-orig-w + (self.mouse-x - self.pressed-x) / preview-area.disp-w, 0.05, 1.0 - crop-x);
-                                                crop-y = clamp(tr-orig-y + (self.mouse-y - self.pressed-y) / preview-area.disp-h, 0.0, max(0.0, tr-orig-b - 0.05));
-                                                crop-h = tr-orig-b - crop-y;
-                                                crop-changed();
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Bottom-left corner handle
+                                // Bottom edge handle (세로 크기 조절)
                                 Rectangle {
                                     x: 0px;
-                                    y: parent.height - 20px;
-                                    width: 20px;
-                                    height: 20px;
-                                    background: #ff3b30;
-                                    border-radius: 10px;
-                                    border-width: 2px;
-                                    border-color: #ffffff;
+                                    y: parent.height - 5px;
+                                    width: 100%;
+                                    height: 10px;
+                                    background: #ff3b3014;
+
+                                    Rectangle {
+                                        y: 4px;
+                                        width: 100%;
+                                        height: 2px;
+                                        background: #ff3b30;
+                                    }
 
                                     TouchArea {
+                                        mouse-cursor: ns-resize;
                                         pointer-event(ev) => {
                                             if (ev.kind == PointerEventKind.down) {
-                                                bl-orig-x = crop-x;
-                                                bl-orig-r = crop-x + crop-w;
-                                                bl-orig-h = crop-h;
+                                                bot-orig-h = crop-h;
                                             } else if (ev.kind == PointerEventKind.move && self.pressed) {
-                                                crop-x = clamp(bl-orig-x + (self.mouse-x - self.pressed-x) / preview-area.disp-w, 0.0, max(0.0, bl-orig-r - 0.05));
-                                                crop-w = bl-orig-r - crop-x;
-                                                crop-h = clamp(bl-orig-h + (self.mouse-y - self.pressed-y) / preview-area.disp-h, 0.05, 1.0 - crop-y);
+                                                crop-h = clamp(bot-orig-h + (self.mouse-y - self.pressed-y) / preview-area.disp-h, 0.05, 1.0 - crop-y);
                                                 crop-changed();
                                             }
                                         }
                                     }
                                 }
 
-                                // Bottom-right corner handle
+                                // Left edge handle (가로 크기 조절)
                                 Rectangle {
-                                    x: parent.width - 20px;
-                                    y: parent.height - 20px;
-                                    width: 20px;
-                                    height: 20px;
-                                    background: #ff3b30;
-                                    border-radius: 10px;
-                                    border-width: 2px;
-                                    border-color: #ffffff;
+                                    x: -5px;
+                                    y: 0px;
+                                    width: 10px;
+                                    height: 100%;
+                                    background: #ff3b3014;
+
+                                    Rectangle {
+                                        x: 4px;
+                                        width: 2px;
+                                        height: 100%;
+                                        background: #ff3b30;
+                                    }
 
                                     TouchArea {
+                                        mouse-cursor: ew-resize;
                                         pointer-event(ev) => {
                                             if (ev.kind == PointerEventKind.down) {
-                                                br-orig-w = crop-w;
-                                                br-orig-h = crop-h;
+                                                left-orig-x = crop-x;
+                                                left-orig-r = crop-x + crop-w;
                                             } else if (ev.kind == PointerEventKind.move && self.pressed) {
-                                                crop-w = clamp(br-orig-w + (self.mouse-x - self.pressed-x) / preview-area.disp-w, 0.05, 1.0 - crop-x);
-                                                crop-h = clamp(br-orig-h + (self.mouse-y - self.pressed-y) / preview-area.disp-h, 0.05, 1.0 - crop-y);
+                                                crop-x = clamp(left-orig-x + (self.mouse-x - self.pressed-x) / preview-area.disp-w, 0.0, max(0.0, left-orig-r - 0.05));
+                                                crop-w = left-orig-r - crop-x;
+                                                crop-changed();
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Right edge handle (가로 크기 조절)
+                                Rectangle {
+                                    x: parent.width - 5px;
+                                    y: 0px;
+                                    width: 10px;
+                                    height: 100%;
+                                    background: #ff3b3014;
+
+                                    Rectangle {
+                                        x: 4px;
+                                        width: 2px;
+                                        height: 100%;
+                                        background: #ff3b30;
+                                    }
+
+                                    TouchArea {
+                                        mouse-cursor: ew-resize;
+                                        pointer-event(ev) => {
+                                            if (ev.kind == PointerEventKind.down) {
+                                                right-orig-w = crop-w;
+                                            } else if (ev.kind == PointerEventKind.move && self.pressed) {
+                                                crop-w = clamp(right-orig-w + (self.mouse-x - self.pressed-x) / preview-area.disp-w, 0.05, 1.0 - crop-x);
                                                 crop-changed();
                                             }
                                         }
@@ -581,9 +583,9 @@ export component MainWindow inherits Window {
                         // Start marker
                         Rectangle {
                             x: trim-start / max(video-duration, 0.01) * tl-w - 7px;
-                            y: 4px;
+                            y: 11px;
                             width: 14px;
-                            height: 26px;
+                            height: 12px;
                             background: #ff9f0a;
                             border-radius: 4px;
                             TouchArea {
@@ -604,9 +606,9 @@ export component MainWindow inherits Window {
                         // End marker
                         Rectangle {
                             x: trim-end / max(video-duration, 0.01) * tl-w - 7px;
-                            y: 4px;
+                            y: 11px;
                             width: 14px;
-                            height: 26px;
+                            height: 12px;
                             background: #30d158;
                             border-radius: 4px;
                             TouchArea {
