@@ -389,13 +389,19 @@ export component MainWindow inherits Window {
 
                                 property <float> drag-orig-x: 0.0;
                                 property <float> drag-orig-y: 0.0;
+                                property <float> drag-cursor-x: 0.0;
+                                property <float> drag-cursor-y: 0.0;
                                 // Edge drag origin snapshots
                                 property <float> top-orig-y: 0.0;
                                 property <float> top-orig-b: 1.0;
+                                property <float> top-cursor-y: 0.0;
                                 property <float> bot-orig-h: 1.0;
+                                property <float> bot-cursor-y: 0.0;
                                 property <float> left-orig-x: 0.0;
                                 property <float> left-orig-r: 1.0;
+                                property <float> left-cursor-x: 0.0;
                                 property <float> right-orig-w: 1.0;
+                                property <float> right-cursor-x: 0.0;
 
                                 // Drag to move the crop area
                                 TouchArea {
@@ -403,9 +409,11 @@ export component MainWindow inherits Window {
                                         if (ev.kind == PointerEventKind.down) {
                                             drag-orig-x = crop-x;
                                             drag-orig-y = crop-y;
+                                            drag-cursor-x = (parent.x + self.mouse-x) / preview-area.disp-w;
+                                            drag-cursor-y = (parent.y + self.mouse-y) / preview-area.disp-h;
                                         } else if (ev.kind == PointerEventKind.move && self.pressed) {
-                                            crop-x = clamp(drag-orig-x + (self.mouse-x - self.pressed-x) / preview-area.disp-w, 0.0, 1.0 - crop-w);
-                                            crop-y = clamp(drag-orig-y + (self.mouse-y - self.pressed-y) / preview-area.disp-h, 0.0, 1.0 - crop-h);
+                                            crop-x = clamp(drag-orig-x + (parent.x + self.mouse-x) / preview-area.disp-w - drag-cursor-x, 0.0, 1.0 - crop-w);
+                                            crop-y = clamp(drag-orig-y + (parent.y + self.mouse-y) / preview-area.disp-h - drag-cursor-y, 0.0, 1.0 - crop-h);
                                             crop-changed();
                                         }
                                     }
@@ -425,18 +433,23 @@ export component MainWindow inherits Window {
                                         height: 2px;
                                         background: #ff3b30;
                                     }
+                                }
 
-                                    TouchArea {
-                                        mouse-cursor: ns-resize;
-                                        pointer-event(ev) => {
-                                            if (ev.kind == PointerEventKind.down) {
-                                                top-orig-y = crop-y;
-                                                top-orig-b = crop-y + crop-h;
-                                            } else if (ev.kind == PointerEventKind.move && self.pressed) {
-                                                crop-y = clamp(top-orig-y + (self.mouse-y - self.pressed-y) / preview-area.disp-h, 0.0, max(0.0, top-orig-b - 0.05));
-                                                crop-h = top-orig-b - crop-y;
-                                                crop-changed();
-                                            }
+                                TouchArea {
+                                    x: 0px;
+                                    y: -5px;
+                                    width: 100%;
+                                    height: 10px;
+                                    mouse-cursor: ns-resize;
+                                    pointer-event(ev) => {
+                                        if (ev.kind == PointerEventKind.down) {
+                                            top-orig-y = crop-y;
+                                            top-orig-b = crop-y + crop-h;
+                                            top-cursor-y = (parent.y + self.y + self.mouse-y) / preview-area.disp-h;
+                                        } else if (ev.kind == PointerEventKind.move && self.pressed) {
+                                            crop-y = clamp(top-orig-y + (parent.y + self.y + self.mouse-y) / preview-area.disp-h - top-cursor-y, 0.0, max(0.0, top-orig-b - 0.05));
+                                            crop-h = top-orig-b - crop-y;
+                                            crop-changed();
                                         }
                                     }
                                 }
@@ -455,16 +468,21 @@ export component MainWindow inherits Window {
                                         height: 2px;
                                         background: #ff3b30;
                                     }
+                                }
 
-                                    TouchArea {
-                                        mouse-cursor: ns-resize;
-                                        pointer-event(ev) => {
-                                            if (ev.kind == PointerEventKind.down) {
-                                                bot-orig-h = crop-h;
-                                            } else if (ev.kind == PointerEventKind.move && self.pressed) {
-                                                crop-h = clamp(bot-orig-h + (self.mouse-y - self.pressed-y) / preview-area.disp-h, 0.05, 1.0 - crop-y);
-                                                crop-changed();
-                                            }
+                                TouchArea {
+                                    x: 0px;
+                                    y: parent.height - 5px;
+                                    width: 100%;
+                                    height: 10px;
+                                    mouse-cursor: ns-resize;
+                                    pointer-event(ev) => {
+                                        if (ev.kind == PointerEventKind.down) {
+                                            bot-orig-h = crop-h;
+                                            bot-cursor-y = (parent.y + self.y + self.mouse-y) / preview-area.disp-h;
+                                        } else if (ev.kind == PointerEventKind.move && self.pressed) {
+                                            crop-h = clamp(bot-orig-h + (parent.y + self.y + self.mouse-y) / preview-area.disp-h - bot-cursor-y, 0.05, 1.0 - crop-y);
+                                            crop-changed();
                                         }
                                     }
                                 }
@@ -483,18 +501,23 @@ export component MainWindow inherits Window {
                                         height: 100%;
                                         background: #ff3b30;
                                     }
+                                }
 
-                                    TouchArea {
-                                        mouse-cursor: ew-resize;
-                                        pointer-event(ev) => {
-                                            if (ev.kind == PointerEventKind.down) {
-                                                left-orig-x = crop-x;
-                                                left-orig-r = crop-x + crop-w;
-                                            } else if (ev.kind == PointerEventKind.move && self.pressed) {
-                                                crop-x = clamp(left-orig-x + (self.mouse-x - self.pressed-x) / preview-area.disp-w, 0.0, max(0.0, left-orig-r - 0.05));
-                                                crop-w = left-orig-r - crop-x;
-                                                crop-changed();
-                                            }
+                                TouchArea {
+                                    x: -5px;
+                                    y: 0px;
+                                    width: 10px;
+                                    height: 100%;
+                                    mouse-cursor: ew-resize;
+                                    pointer-event(ev) => {
+                                        if (ev.kind == PointerEventKind.down) {
+                                            left-orig-x = crop-x;
+                                            left-orig-r = crop-x + crop-w;
+                                            left-cursor-x = (parent.x + self.x + self.mouse-x) / preview-area.disp-w;
+                                        } else if (ev.kind == PointerEventKind.move && self.pressed) {
+                                            crop-x = clamp(left-orig-x + (parent.x + self.x + self.mouse-x) / preview-area.disp-w - left-cursor-x, 0.0, max(0.0, left-orig-r - 0.05));
+                                            crop-w = left-orig-r - crop-x;
+                                            crop-changed();
                                         }
                                     }
                                 }
@@ -513,16 +536,21 @@ export component MainWindow inherits Window {
                                         height: 100%;
                                         background: #ff3b30;
                                     }
+                                }
 
-                                    TouchArea {
-                                        mouse-cursor: ew-resize;
-                                        pointer-event(ev) => {
-                                            if (ev.kind == PointerEventKind.down) {
-                                                right-orig-w = crop-w;
-                                            } else if (ev.kind == PointerEventKind.move && self.pressed) {
-                                                crop-w = clamp(right-orig-w + (self.mouse-x - self.pressed-x) / preview-area.disp-w, 0.05, 1.0 - crop-x);
-                                                crop-changed();
-                                            }
+                                TouchArea {
+                                    x: parent.width - 5px;
+                                    y: 0px;
+                                    width: 10px;
+                                    height: 100%;
+                                    mouse-cursor: ew-resize;
+                                    pointer-event(ev) => {
+                                        if (ev.kind == PointerEventKind.down) {
+                                            right-orig-w = crop-w;
+                                            right-cursor-x = (parent.x + self.x + self.mouse-x) / preview-area.disp-w;
+                                        } else if (ev.kind == PointerEventKind.move && self.pressed) {
+                                            crop-w = clamp(right-orig-w + (parent.x + self.x + self.mouse-x) / preview-area.disp-w - right-cursor-x, 0.05, 1.0 - crop-x);
+                                            crop-changed();
                                         }
                                     }
                                 }
