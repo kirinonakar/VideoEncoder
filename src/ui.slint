@@ -1,11 +1,11 @@
-import { Button, LineEdit, Slider, HorizontalBox, VerticalBox, ProgressIndicator, ScrollView, CheckBox } from "std-widgets.slint";
+import { Button, LineEdit, Slider, HorizontalBox, VerticalBox, ProgressIndicator, ScrollView, CheckBox, ComboBox, TabWidget } from "std-widgets.slint";
 
 export component MainWindow inherits Window {
     title: "VideoEncoder FFmpeg Wrapper";
     icon: @image-url("app.png");
     default-font-family: "Segoe UI";
-    min-width: 700px;
-    min-height: 680px;
+    min-width: 760px;
+    min-height: 720px;
     background: #f5f5f7; // Soft Light Gray background
 
     // Callbacks to Rust
@@ -21,6 +21,19 @@ export component MainWindow inherits Window {
     // Custom callback for D&D trigger from Rust
     callback files-dropped(string);
 
+    // --- Video editor callbacks ---
+    callback pick-video();
+    callback open-video();
+    callback seek-time(float);
+    callback mark-trim-start();
+    callback mark-trim-end();
+    callback trim-changed();
+    callback crop-changed();
+    callback toggle-play();
+    callback run-cut();
+    callback run-crop();
+    callback reset-edit();
+
     // Properties from/to Rust
     in-out property <string> ffmpeg-path: "";
     in-out property <string> output-suffix: "_h265";
@@ -35,6 +48,31 @@ export component MainWindow inherits Window {
     in-out property <string> current_time_text: "";
     in-out property <bool> is-encoding: false;
 
+    // --- Video editor properties ---
+    in-out property <string> current-video-path: "";
+    in-out property <image> video-image;
+    in-out property <bool> video-loaded: false;
+    in-out property <float> video-duration: 0.0;
+    in-out property <float> video-width: 0.0;
+    in-out property <float> video-height: 0.0;
+    in-out property <float> preview-time: 0.0;
+    in-out property <float> trim-start: 0.0;
+    in-out property <float> trim-end: 0.0;
+    in-out property <float> crop-x: 0.0;
+    in-out property <float> crop-y: 0.0;
+    in-out property <float> crop-w: 1.0;
+    in-out property <float> crop-h: 1.0;
+    in-out property <bool> is-playing: false;
+    in-out property <bool> edit-busy: false;
+    in-out property <float> edit-progress: 0.0;
+    in-out property <string> edit-status-text: "";
+    in-out property <string> time-preview-text: "";
+    in-out property <string> time-start-text: "";
+    in-out property <string> time-end-text: "";
+    in-out property <string> crop-info-text: "";
+    in-out property <string> video-info-text: "";
+    in-out property <int> selected-index: 0;
+
     VerticalBox {
         padding: 16px;
         spacing: 12px;
@@ -48,6 +86,16 @@ export component MainWindow inherits Window {
             color: #0071e3; // Apple blue accent
             horizontal-alignment: center;
         }
+
+        TabWidget {
+            vertical-stretch: 1;
+
+            Tab {
+                title: "인코딩";
+
+                VerticalBox {
+                    padding: 10px;
+                    spacing: 12px;
 
         // Configuration Section
         Rectangle {
@@ -262,6 +310,295 @@ export component MainWindow inherits Window {
                 clicked => { stop-encoding(); }
                 height: 36px;
                 width: 180px;
+            }
+        }
+                }
+            }
+
+            Tab {
+                title: "잘라내기 / 크롭";
+
+                VerticalBox {
+                    padding: 10px;
+                    spacing: 8px;
+
+                    // Video source row
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text { text: "비디오:"; color: #1d1d1f; width: 60px; vertical-alignment: center; font-weight: 500; }
+                        ComboBox {
+                            model: file-list;
+                            current-index <=> selected-index;
+                            selected => { open-video(); }
+                            vertical-stretch: 1;
+                        }
+                        Button { text: "열기"; clicked => { open-video(); } }
+                        Button { text: "파일 선택..."; clicked => { pick-video(); } }
+                    }
+
+                    Text {
+                        text: video-info-text;
+                        color: #86868b;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    // Preview area
+                    preview-area := Rectangle {
+                        vertical-stretch: 1;
+                        min-height: 240px;
+                        background: #1d1d1f;
+                        border-radius: 8px;
+                        clip: true;
+                        property <length> area-w: self.width;
+                        property <length> area-h: self.height;
+                        property <length> disp-w: min(area-w, area-h * (video-width / max(1.0, video-height)));
+                        property <length> disp-h: min(area-h, area-w * (max(1.0, video-height) / max(1.0, video-width)));
+
+                        if (!video-loaded) : Text {
+                            text: "비디오를 선택하면 여기에 미리보기가 표시됩니다";
+                            color: #86868b;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        if (video-loaded) : Rectangle {
+                            x: (parent.area-w - parent.disp-w) / 2;
+                            y: (parent.area-h - parent.disp-h) / 2;
+                            width: parent.disp-w;
+                            height: parent.disp-h;
+                            background: #000000;
+
+                            Image {
+                                source: video-image;
+                                width: 100%;
+                                height: 100%;
+                                image-fit: fill;
+                            }
+
+                            // Crop overlay
+                            Rectangle {
+                                x: crop-x * parent.width;
+                                y: crop-y * parent.height;
+                                width: crop-w * parent.width;
+                                height: crop-h * parent.height;
+                                border-width: 2px;
+                                border-color: #ff3b30;
+                                background: #ff3b3014;
+
+                                property <float> drag-orig-x: 0.0;
+                                property <float> drag-orig-y: 0.0;
+                                property <float> resize-orig-w: 1.0;
+                                property <float> resize-orig-h: 1.0;
+
+                                // Drag to move the crop area
+                                TouchArea {
+                                    pointer-event(ev) => {
+                                        if (ev.kind == PointerEventKind.down) {
+                                            drag-orig-x = crop-x;
+                                            drag-orig-y = crop-y;
+                                        } else if (ev.kind == PointerEventKind.move && self.pressed) {
+                                            crop-x = clamp(drag-orig-x + (self.mouse-x - self.pressed-x) / preview-area.disp-w, 0.0, 1.0 - crop-w);
+                                            crop-y = clamp(drag-orig-y + (self.mouse-y - self.pressed-y) / preview-area.disp-h, 0.0, 1.0 - crop-y);
+                                            crop-changed();
+                                        }
+                                    }
+                                }
+
+                                // Bottom-right resize handle
+                                Rectangle {
+                                    x: parent.width - 20px;
+                                    y: parent.height - 20px;
+                                    width: 20px;
+                                    height: 20px;
+                                    background: #ff3b30;
+                                    border-radius: 10px;
+                                    border-width: 2px;
+                                    border-color: #ffffff;
+
+                                    TouchArea {
+                                        pointer-event(ev) => {
+                                            if (ev.kind == PointerEventKind.down) {
+                                                resize-orig-w = crop-w;
+                                                resize-orig-h = crop-h;
+                                            } else if (ev.kind == PointerEventKind.move && self.pressed) {
+                                                crop-w = clamp(resize-orig-w + (self.mouse-x - self.pressed-x) / preview-area.disp-w, 0.05, 1.0 - crop-x);
+                                                crop-h = clamp(resize-orig-h + (self.mouse-y - self.pressed-y) / preview-area.disp-h, 0.05, 1.0 - crop-y);
+                                                crop-changed();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Timeline
+                    Rectangle {
+                        height: 34px;
+                        property <length> tl-w: self.width;
+                        property <bool> tl-dragging: false;
+                        property <bool> start-dragging: false;
+                        property <bool> end-dragging: false;
+
+                        // Track
+                        Rectangle {
+                            y: 14px;
+                            height: 6px;
+                            width: 100%;
+                            background: #3a3a3c;
+                            border-radius: 3px;
+                        }
+
+                        // Trim range highlight
+                        Rectangle {
+                            x: trim-start / max(video-duration, 0.01) * tl-w;
+                            y: 8px;
+                            width: max(0px, (trim-end - trim-start) / max(video-duration, 0.01) * tl-w);
+                            height: 18px;
+                            background: #30d15859;
+                            border-radius: 4px;
+                        }
+
+                        // Whole-bar seek (click/drag to move playhead)
+                        TouchArea {
+                            pointer-event(ev) => {
+                                if (ev.kind == PointerEventKind.down) {
+                                    tl-dragging = true;
+                                } else if (ev.kind == PointerEventKind.up) {
+                                    tl-dragging = false;
+                                } else if (ev.kind == PointerEventKind.move && tl-dragging) {
+                                    seek-time(clamp(self.mouse-x / tl-w * video-duration, 0.0, video-duration));
+                                }
+                            }
+                        }
+
+                        // Playhead (visual only)
+                        Rectangle {
+                            x: preview-time / max(video-duration, 0.01) * tl-w - 3px;
+                            y: 0px;
+                            width: 6px;
+                            height: 34px;
+                            background: #0071e3;
+                            border-radius: 3px;
+                        }
+
+                        // Start marker
+                        Rectangle {
+                            x: trim-start / max(video-duration, 0.01) * tl-w - 7px;
+                            y: 4px;
+                            width: 14px;
+                            height: 26px;
+                            background: #ff9f0a;
+                            border-radius: 4px;
+                            TouchArea {
+                                pointer-event(ev) => {
+                                    if (ev.kind == PointerEventKind.down) {
+                                        start-dragging = true;
+                                    } else if (ev.kind == PointerEventKind.up) {
+                                        start-dragging = false;
+                                    } else if (ev.kind == PointerEventKind.move && start-dragging) {
+                                        trim-start = clamp((self.mouse-x + parent.x) / tl-w * video-duration, 0.0, max(0.0, trim-end - 0.05));
+                                        trim-changed();
+                                    }
+                                }
+                            }
+                        }
+
+                        // End marker
+                        Rectangle {
+                            x: trim-end / max(video-duration, 0.01) * tl-w - 7px;
+                            y: 4px;
+                            width: 14px;
+                            height: 26px;
+                            background: #30d158;
+                            border-radius: 4px;
+                            TouchArea {
+                                pointer-event(ev) => {
+                                    if (ev.kind == PointerEventKind.down) {
+                                        end-dragging = true;
+                                    } else if (ev.kind == PointerEventKind.up) {
+                                        end-dragging = false;
+                                    } else if (ev.kind == PointerEventKind.move && end-dragging) {
+                                        trim-end = clamp((self.mouse-x + parent.x) / tl-w * video-duration, trim-start + 0.05, video-duration);
+                                        trim-changed();
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Time labels
+                    HorizontalLayout {
+                        Text { text: "시작 " + time-start-text; color: #ff9f0a; font-size: 12px; width: 130px; }
+                        Rectangle {}
+                        Text { text: time-preview-text; color: #0071e3; font-size: 12px; }
+                        Rectangle {}
+                        Text { text: "끝 " + time-end-text; color: #30d158; font-size: 12px; width: 130px; }
+                    }
+
+                    // Trim sliders
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text { text: "시작:"; width: 42px; color: #1d1d1f; vertical-alignment: center; font-size: 12px; }
+                        Slider {
+                            value <=> trim-start;
+                            minimum: 0;
+                            maximum: max(video-duration, 0.01);
+                            changed => { trim-changed(); }
+                            vertical-stretch: 1;
+                        }
+                        Text { text: "끝:"; width: 32px; color: #1d1d1f; vertical-alignment: center; font-size: 12px; }
+                        Slider {
+                            value <=> trim-end;
+                            minimum: 0;
+                            maximum: max(video-duration, 0.01);
+                            changed => { trim-changed(); }
+                            vertical-stretch: 1;
+                        }
+                    }
+
+                    Text { text: crop-info-text; color: #86868b; font-size: 12px; }
+
+                    // Marker & play buttons
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button { text: "시작점 ← 현재"; enabled: video-loaded && !edit-busy; clicked => { mark-trim-start(); } }
+                        Button { text: "끝점 ← 현재"; enabled: video-loaded && !edit-busy; clicked => { mark-trim-end(); } }
+                        Button { text: is-playing ? "일시정지" : "재생"; enabled: video-loaded && !edit-busy; clicked => { toggle-play(); } }
+                        Button { text: "편집 초기화"; enabled: video-loaded && !edit-busy; clicked => { reset-edit(); } }
+                    }
+
+                    // Action buttons
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button {
+                            text: "잘라내기 실행 (무손실)";
+                            primary: true;
+                            enabled: video-loaded && !edit-busy && (trim-end - trim-start) > 0.05;
+                            clicked => { run-cut(); }
+                        }
+                        Button {
+                            text: "크롭 + 컷 실행";
+                            primary: true;
+                            enabled: video-loaded && !edit-busy && (trim-end - trim-start) > 0.05;
+                            clicked => { run-crop(); }
+                        }
+                    }
+
+                    ProgressIndicator {
+                        progress: edit-progress;
+                        height: 8px;
+                    }
+
+                    Text {
+                        text: edit-status-text;
+                        wrap: word-wrap;
+                        color: #1d1d1f;
+                        font-size: 12px;
+                    }
+                }
             }
         }
     }

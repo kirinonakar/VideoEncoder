@@ -94,6 +94,269 @@ fn seconds_to_hms(seconds: f32) -> String {
     format!("{:02}:{:02}:{:02}", h, m, s)
 }
 
+// --- Video Editor (Trim / Crop) Helpers ---
+
+struct FrameRequester {
+    busy: AtomicBool,
+    pending: std::sync::Mutex<Option<f32>>,
+}
+
+impl FrameRequester {
+    fn request(self: &Arc<Self>, weak: slint::Weak<MainWindow>, ffmpeg: String, path: PathBuf, t: f32) {
+        if self.busy.swap(true, Ordering::SeqCst) {
+            *self.pending.lock().unwrap() = Some(t);
+            return;
+        }
+        let this = self.clone();
+        let w = weak.clone();
+        tokio::spawn(async move {
+            let mut t = t;
+            loop {
+                let res = extract_frame(&ffmpeg, &path, t)
+                    .await
+                    .and_then(|png| decode_png_rgba(&png));
+                let next = { this.pending.lock().unwrap().take() };
+                if next.is_none() {
+                    this.busy.store(false, Ordering::SeqCst);
+                }
+                let w2 = w.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = w2.upgrade() {
+                        match &res {
+                            Ok((bytes, width, height)) => {
+                                let buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                                    bytes, *width, *height,
+                                );
+                                ui.set_video_image(slint::Image::from_rgba8(buf));
+                            }
+                            Err(e) => {
+                                ui.set_edit_status_text(format!("프레임 추출 실패: {}", e).into());
+                            }
+                        }
+                    }
+                });
+                match next {
+                    Some(n) => t = n,
+                    None => break,
+                }
+            }
+        });
+    }
+}
+
+async fn probe_video(ffmpeg: &str, path: &Path) -> anyhow::Result<(f32, f32, f32)> {
+    let mut cmd = Command::new(ffmpeg);
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000);
+    let out = cmd
+        .args(["-hide_banner", "-i"])
+        .arg(path)
+        .stderr(Stdio::piped())
+        .stdout(Stdio::null())
+        .output()
+        .await?;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let dur_re = Regex::new(r"Duration:\s*(\d{2,}:\d{2}:\d{2}\.\d+)").unwrap();
+    let res_re = Regex::new(r"Video:.*?(\d{2,5})x(\d{2,5})").unwrap();
+    let duration = dur_re
+        .captures(&stderr)
+        .and_then(|c| c.get(1))
+        .map(|m| time_str_to_seconds(m.as_str()))
+        .ok_or_else(|| anyhow::anyhow!("Duration 정보를 찾지 못했습니다"))?;
+    let (w, h) = res_re
+        .captures(&stderr)
+        .map(|c| {
+            (
+                c[1].parse::<f32>().unwrap_or(0.0),
+                c[2].parse::<f32>().unwrap_or(0.0),
+            )
+        })
+        .unwrap_or((0.0, 0.0));
+    Ok((duration, w, h))
+}
+
+async fn extract_frame(ffmpeg: &str, path: &Path, t: f32) -> anyhow::Result<Vec<u8>> {
+    let mut cmd = Command::new(ffmpeg);
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000);
+    let out = cmd
+        .args(["-hide_banner", "-loglevel", "error", "-ss"])
+        .arg(format!("{:.3}", t))
+        .arg("-i")
+        .arg(path)
+        .args(["-frames:v", "1", "-an", "-f", "image2pipe", "-vcodec", "png", "-y", "pipe:1"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .output()
+        .await?;
+    anyhow::ensure!(
+        !out.stdout.is_empty(),
+        "프레임 추출 실패 (시간이 영상 끝을 벗어났을 수 있습니다)"
+    );
+    Ok(out.stdout)
+}
+
+fn decode_png_rgba(png: &[u8]) -> anyhow::Result<(Vec<u8>, u32, u32)> {
+    let img = image::load_from_memory(png)?;
+    let rgba = img.to_rgba8();
+    let (w, h) = (rgba.width(), rgba.height());
+    Ok((rgba.into_raw(), w, h))
+}
+
+/// Watches ffmpeg stderr for progress. Returns success.
+async fn watch_progress(mut child: tokio::process::Child, total_dur: f32, on_progress: impl Fn(f32) + Send + 'static) -> bool {
+    let mut stderr = match child.stderr.take() {
+        Some(s) => s,
+        None => return false,
+    };
+    let time_re = Regex::new(r"(?:out_time|time)=\s*(\d{2,}:\d{2}:\d{2}\.\d+)").unwrap();
+    let mut acc = String::new();
+    let mut buf = [0u8; 4096];
+    let mut last = -1.0f32;
+    loop {
+        let n = match stderr.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        acc.push_str(&String::from_utf8_lossy(&buf[..n]));
+        while let Some(pos) = acc.find(|c| c == '\n' || c == '\r') {
+            let line = acc[..pos].to_string();
+            acc = acc[pos + 1..].to_string();
+            if let Some(caps) = time_re.captures(&line) {
+                let t = time_str_to_seconds(caps.get(1).unwrap().as_str());
+                let pct = if total_dur > 0.0 { (t / total_dur).clamp(0.0, 1.0) } else { 0.0 };
+                if (pct - last).abs() > 0.001 {
+                    last = pct;
+                    on_progress(pct);
+                }
+            }
+        }
+    }
+    match child.wait().await {
+        Ok(s) => s.success(),
+        Err(_) => false,
+    }
+}
+
+async fn do_cut(weak: slint::Weak<MainWindow>, ffmpeg: String, src: PathBuf, out: PathBuf, start: f32, dur: f32, label: String) {
+    let mut cmd = Command::new(&ffmpeg);
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000);
+    cmd.arg("-y")
+        .arg("-hide_banner")
+        .arg("-ss").arg(format!("{:.3}", start))
+        .arg("-i").arg(&src)
+        .arg("-t").arg(format!("{:.3}", dur))
+        .arg("-c").arg("copy")
+        .arg("-avoid_negative_ts").arg("make_zero")
+        .arg("-map").arg("0")
+        .arg("-map_metadata").arg("0")
+        .arg("-progress").arg("pipe:2")
+        .arg(&out)
+        .stderr(Stdio::piped())
+        .stdout(Stdio::null())
+        .stdin(Stdio::null());
+    let child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = slint::invoke_from_event_loop({
+                let weak = weak.clone();
+                move || {
+                    if let Some(ui) = weak.upgrade() {
+                        ui.set_edit_busy(false);
+                        ui.set_edit_status_text(format!("FFmpeg 실행 실패: {}", e).into());
+                    }
+                }
+            });
+            return;
+        }
+    };
+    let ok = watch_progress(child, dur, {
+        let weak = weak.clone();
+        move |pct| {
+            let weak2 = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak2.upgrade() {
+                    ui.set_edit_progress(pct);
+                }
+            });
+        }
+    })
+    .await;
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(ui) = weak.upgrade() {
+            ui.set_edit_busy(false);
+            if ok {
+                ui.set_edit_progress(1.0);
+                ui.set_edit_status_text(format!("{} 완료: {}", label, out.display()).into());
+            } else {
+                ui.set_edit_status_text(format!("{} 실패", label).into());
+            }
+        }
+    });
+}
+
+async fn do_crop(weak: slint::Weak<MainWindow>, ffmpeg: String, src: PathBuf, out: PathBuf, start: f32, dur: f32, filter: String, crf: i32, label: String) {
+    let mut cmd = Command::new(&ffmpeg);
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000);
+    cmd.arg("-y")
+        .arg("-hide_banner")
+        .arg("-ss").arg(format!("{:.3}", start))
+        .arg("-i").arg(&src)
+        .arg("-t").arg(format!("{:.3}", dur))
+        .arg("-vf").arg(&filter)
+        .arg("-c:v").arg("libx265")
+        .arg("-crf").arg(crf.to_string())
+        .arg("-preset").arg("medium")
+        .arg("-c:a").arg("copy")
+        .arg("-map_metadata").arg("0")
+        .arg("-progress").arg("pipe:2")
+        .arg(&out)
+        .stderr(Stdio::piped())
+        .stdout(Stdio::null())
+        .stdin(Stdio::null());
+    let child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = slint::invoke_from_event_loop({
+                let weak = weak.clone();
+                move || {
+                    if let Some(ui) = weak.upgrade() {
+                        ui.set_edit_busy(false);
+                        ui.set_edit_status_text(format!("FFmpeg 실행 실패: {}", e).into());
+                    }
+                }
+            });
+            return;
+        }
+    };
+    let ok = watch_progress(child, dur, {
+        let weak = weak.clone();
+        move |pct| {
+            let weak2 = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak2.upgrade() {
+                    ui.set_edit_progress(pct);
+                }
+            });
+        }
+    })
+    .await;
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(ui) = weak.upgrade() {
+            ui.set_edit_busy(false);
+            if ok {
+                ui.set_edit_progress(1.0);
+                ui.set_edit_status_text(format!("{} 완료: {}", label, out.display()).into());
+            } else {
+                ui.set_edit_status_text(format!("{} 실패", label).into());
+            }
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let main_window = MainWindow::new()?;
@@ -510,6 +773,378 @@ async fn main() -> Result<()> {
                     }
                 });
             });
+        });
+    }
+
+    // === Video Editor (Trim / Crop) Callbacks ===
+    let play_timer = Rc::new(slint::Timer::default());
+    let frame_requester = Arc::new(FrameRequester {
+        busy: AtomicBool::new(false),
+        pending: std::sync::Mutex::new(None),
+    });
+
+    fn load_video_async(
+        ui_weak: slint::Weak<MainWindow>,
+        requester: Arc<FrameRequester>,
+        ffmpeg: String,
+        path: PathBuf,
+    ) {
+        let weak = ui_weak.clone();
+        tokio::spawn(async move {
+            let res = probe_video(&ffmpeg, &path).await;
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_is_playing(false);
+                    match res {
+                        Ok((dur, w, h)) => {
+                            ui.set_video_duration(dur);
+                            ui.set_video_width(w);
+                            ui.set_video_height(h);
+                            ui.set_video_loaded(true);
+                            ui.set_preview_time(0.0);
+                            ui.set_trim_start(0.0);
+                            ui.set_trim_end(dur);
+                            ui.set_crop_x(0.0);
+                            ui.set_crop_y(0.0);
+                            ui.set_crop_w(1.0);
+                            ui.set_crop_h(1.0);
+                            ui.set_time_preview_text(seconds_to_hms(0.0).into());
+                            ui.set_time_start_text(seconds_to_hms(0.0).into());
+                            ui.set_time_end_text(seconds_to_hms(dur).into());
+                            ui.set_video_info_text(
+                                format!(
+                                    "{}  |  길이 {}  |  해상도 {}x{}",
+                                    path.file_name().map(|s| s.to_string_lossy()).unwrap_or_default(),
+                                    seconds_to_hms(dur),
+                                    w as i32,
+                                    h as i32
+                                )
+                                .into(),
+                            );
+                            ui.set_crop_info_text(format!("크롭 영역: 전체 ({}x{})", w as i32, h as i32).into());
+                            ui.set_edit_status_text("비디오를 불러왔습니다. 타임라인에서 구간을 선택하고 크롭 영역을 지정하세요.".into());
+                            requester.request(weak.clone(), ffmpeg.clone(), path.clone(), 0.0);
+                        }
+                        Err(e) => {
+                            ui.set_video_loaded(false);
+                            ui.set_edit_status_text(format!("비디오 정보를 읽지 못했습니다: {}", e).into());
+                        }
+                    }
+                }
+            });
+        });
+    }
+
+    // Pick video file
+    {
+        let weak = ui_weak.clone();
+        let requester = frame_requester.clone();
+        main_window.on_pick_video(move || {
+            if let Some(ui) = weak.upgrade() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Video", &["mp4", "mkv", "avi", "mov", "wmv", "flv", "mpg", "mpeg"])
+                    .pick_file()
+                {
+                    let ffmpeg = ui.get_ffmpeg_path().to_string();
+                    if ffmpeg.is_empty() {
+                        ui.set_edit_status_text("먼저 FFmpeg 경로를 설정하세요.".into());
+                        return;
+                    }
+                    ui.set_current_video_path(path.to_string_lossy().to_string().into());
+                    ui.set_edit_status_text("비디오 정보를 읽는 중...".into());
+                    load_video_async(weak.clone(), requester.clone(), ffmpeg, path);
+                }
+            }
+        });
+    }
+
+    // Open video from list selection
+    {
+        let weak = ui_weak.clone();
+        let model = files_model.clone();
+        let requester = frame_requester.clone();
+        main_window.on_open_video(move || {
+            if let Some(ui) = weak.upgrade() {
+                let ffmpeg = ui.get_ffmpeg_path().to_string();
+                if ffmpeg.is_empty() {
+                    ui.set_edit_status_text("먼저 FFmpeg 경로를 설정하세요.".into());
+                    return;
+                }
+                let idx = ui.get_selected_index();
+                let path = if idx >= 0 && (idx as usize) < model.row_count() {
+                    model.row_data(idx as usize).map(|s| PathBuf::from(s.as_str()))
+                } else {
+                    None
+                };
+                let path = path.or_else(|| {
+                    let s = ui.get_current_video_path().to_string();
+                    if s.is_empty() { None } else { Some(PathBuf::from(s)) }
+                });
+                if let Some(p) = path {
+                    if p.exists() {
+                        ui.set_current_video_path(p.to_string_lossy().to_string().into());
+                        ui.set_edit_status_text("비디오 정보를 읽는 중...".into());
+                        load_video_async(weak.clone(), requester.clone(), ffmpeg, p);
+                        return;
+                    }
+                }
+                ui.set_edit_status_text("선택된 비디오가 없습니다. 파일을 추가하거나 '파일 선택'을 누르세요.".into());
+            }
+        });
+    }
+
+    // Seek (preview frame)
+    {
+        let weak = ui_weak.clone();
+        let requester = frame_requester.clone();
+        main_window.on_seek_time(move |t| {
+            if let Some(ui) = weak.upgrade() {
+                let dur = ui.get_video_duration();
+                let t = t.clamp(0.0, dur);
+                ui.set_preview_time(t);
+                ui.set_time_preview_text(seconds_to_hms(t).into());
+                if ui.get_video_loaded() {
+                    let ffmpeg = ui.get_ffmpeg_path().to_string();
+                    if !ffmpeg.is_empty() {
+                        let path = PathBuf::from(ui.get_current_video_path().to_string());
+                        let t2 = (t - 0.05).max(0.0);
+                        requester.request(weak.clone(), ffmpeg, path, t2);
+                    }
+                }
+            }
+        });
+    }
+
+    // Mark trim start / end
+    {
+        let weak = ui_weak.clone();
+        main_window.on_mark_trim_start(move || {
+            if let Some(ui) = weak.upgrade() {
+                let t = ui.get_preview_time();
+                let min_end = (ui.get_trim_end() - 0.05).max(0.0);
+                ui.set_trim_start(t.min(min_end).max(0.0));
+                ui.set_time_start_text(seconds_to_hms(ui.get_trim_start()).into());
+            }
+        });
+    }
+    {
+        let weak = ui_weak.clone();
+        main_window.on_mark_trim_end(move || {
+            if let Some(ui) = weak.upgrade() {
+                let t = ui.get_preview_time();
+                let max_start = ui.get_trim_start() + 0.05;
+                ui.set_trim_end(t.max(max_start).min(ui.get_video_duration()));
+                ui.set_time_end_text(seconds_to_hms(ui.get_trim_end()).into());
+            }
+        });
+    }
+
+    // Trim values changed -> refresh labels
+    {
+        let weak = ui_weak.clone();
+        main_window.on_trim_changed(move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_time_start_text(seconds_to_hms(ui.get_trim_start()).into());
+                ui.set_time_end_text(seconds_to_hms(ui.get_trim_end()).into());
+            }
+        });
+    }
+
+    // Crop changed -> refresh crop info
+    {
+        let weak = ui_weak.clone();
+        main_window.on_crop_changed(move || {
+            if let Some(ui) = weak.upgrade() {
+                let vw = ui.get_video_width();
+                let vh = ui.get_video_height();
+                let x = (ui.get_crop_x() * vw).round() as i32;
+                let y = (ui.get_crop_y() * vh).round() as i32;
+                let w = ((ui.get_crop_w() * vw).round() as i32).max(0);
+                let h = ((ui.get_crop_h() * vh).round() as i32).max(0);
+                ui.set_crop_info_text(format!("크롭: x={} y={} 크기={}x{} (전체 {}x{})", x, y, w, h, vw as i32, vh as i32).into());
+            }
+        });
+    }
+
+    // Play / Pause
+    {
+        let weak = ui_weak.clone();
+        let timer = play_timer.clone();
+        let requester = frame_requester.clone();
+        main_window.on_toggle_play(move || {
+            if let Some(ui) = weak.upgrade() {
+                if ui.get_is_playing() {
+                    timer.stop();
+                    ui.set_is_playing(false);
+                } else {
+                    if !ui.get_video_loaded() { return; }
+                    ui.set_is_playing(true);
+                    let w = weak.clone();
+                    let ffmpeg = ui.get_ffmpeg_path().to_string();
+                    let path = PathBuf::from(ui.get_current_video_path().to_string());
+                    let rq = requester.clone();
+                    let timer2 = timer.clone();
+                    timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(500), move || {
+                        if let Some(ui) = w.upgrade() {
+                            if !ui.get_is_playing() {
+                                timer2.stop();
+                                return;
+                            }
+                            let t = ui.get_preview_time() + 0.5;
+                            let dur = ui.get_video_duration();
+                            if t >= dur {
+                                ui.set_preview_time(dur);
+                                ui.set_time_preview_text(seconds_to_hms(dur).into());
+                                ui.set_is_playing(false);
+                                timer2.stop();
+                            } else {
+                                ui.set_preview_time(t);
+                                ui.set_time_preview_text(seconds_to_hms(t).into());
+                                rq.request(w.clone(), ffmpeg.clone(), path.clone(), t);
+                            }
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    // Reset edit options
+    {
+        let weak = ui_weak.clone();
+        let timer = play_timer.clone();
+        let requester = frame_requester.clone();
+        main_window.on_reset_edit(move || {
+            if let Some(ui) = weak.upgrade() {
+                timer.stop();
+                ui.set_is_playing(false);
+                let dur = ui.get_video_duration();
+                ui.set_preview_time(0.0);
+                ui.set_trim_start(0.0);
+                ui.set_trim_end(dur);
+                ui.set_crop_x(0.0);
+                ui.set_crop_y(0.0);
+                ui.set_crop_w(1.0);
+                ui.set_crop_h(1.0);
+                ui.set_time_preview_text(seconds_to_hms(0.0).into());
+                ui.set_time_start_text(seconds_to_hms(0.0).into());
+                ui.set_time_end_text(seconds_to_hms(dur).into());
+                if ui.get_video_loaded() {
+                    ui.set_crop_info_text(
+                        format!("크롭 영역: 전체 ({}x{})", ui.get_video_width() as i32, ui.get_video_height() as i32).into(),
+                    );
+                    let ffmpeg = ui.get_ffmpeg_path().to_string();
+                    if !ffmpeg.is_empty() {
+                        let path = PathBuf::from(ui.get_current_video_path().to_string());
+                        requester.request(weak.clone(), ffmpeg, path, 0.0);
+                    }
+                }
+                ui.set_edit_status_text("편집 옵션을 초기화했습니다.".into());
+            }
+        });
+    }
+
+    // Run Cut (no re-encode)
+    {
+        let weak = ui_weak.clone();
+        let timer = play_timer.clone();
+        main_window.on_run_cut(move || {
+            if let Some(ui) = weak.upgrade() {
+                timer.stop();
+                ui.set_is_playing(false);
+                let ffmpeg = ui.get_ffmpeg_path().to_string();
+                if ffmpeg.is_empty() {
+                    ui.set_edit_status_text("FFmpeg 경로가 설정되지 않았습니다.".into());
+                    return;
+                }
+                let src = PathBuf::from(ui.get_current_video_path().to_string());
+                if !src.exists() {
+                    ui.set_edit_status_text("비디오 파일이 없습니다.".into());
+                    return;
+                }
+                let start = ui.get_trim_start();
+                let end = ui.get_trim_end();
+                let dur = end - start;
+                if dur <= 0.05 {
+                    ui.set_edit_status_text("잘라낼 구간이 올바르지 않습니다 (시작 < 끝).".into());
+                    return;
+                }
+                let ext = src.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_else(|| "mp4".to_string());
+                let stem = src.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "output".to_string());
+                let out = src.with_file_name(format!("{}_cut.{}", stem, ext));
+                ui.set_edit_busy(true);
+                ui.set_edit_progress(0.0);
+                ui.set_edit_status_text(format!("잘라내기 시작: {}", src.display()).into());
+                tokio::spawn(do_cut(weak.clone(), ffmpeg, src, out, start, dur, "잘라내기".to_string()));
+            }
+        });
+    }
+
+    // Run Crop + Cut (re-encode)
+    {
+        let weak = ui_weak.clone();
+        let timer = play_timer.clone();
+        main_window.on_run_crop(move || {
+            if let Some(ui) = weak.upgrade() {
+                timer.stop();
+                ui.set_is_playing(false);
+                let ffmpeg = ui.get_ffmpeg_path().to_string();
+                if ffmpeg.is_empty() {
+                    ui.set_edit_status_text("FFmpeg 경로가 설정되지 않았습니다.".into());
+                    return;
+                }
+                let src = PathBuf::from(ui.get_current_video_path().to_string());
+                if !src.exists() {
+                    ui.set_edit_status_text("비디오 파일이 없습니다.".into());
+                    return;
+                }
+                let start = ui.get_trim_start();
+                let end = ui.get_trim_end();
+                let dur = end - start;
+                if dur <= 0.05 {
+                    ui.set_edit_status_text("잘라낼 구간이 올바르지 않습니다 (시작 < 끝).".into());
+                    return;
+                }
+                let stem = src.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "output".to_string());
+                let vw = ui.get_video_width();
+                let vh = ui.get_video_height();
+                let cx = ui.get_crop_x();
+                let cy = ui.get_crop_y();
+                let cw = ui.get_crop_w();
+                let ch = ui.get_crop_h();
+                ui.set_edit_busy(true);
+                ui.set_edit_progress(0.0);
+                let full_frame = cw >= 0.98 && ch >= 0.98 && cx <= 0.02 && cy <= 0.02;
+                if full_frame {
+                    let ext = src.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_else(|| "mp4".to_string());
+                    let out = src.with_file_name(format!("{}_cut.{}", stem, ext));
+                    ui.set_edit_status_text("크롭 영역이 전체이므로 무손실 잘라내기로 실행합니다.".into());
+                    tokio::spawn(do_cut(weak.clone(), ffmpeg, src, out, start, dur, "잘라내기".to_string()));
+                    return;
+                }
+                if vw <= 0.0 || vh <= 0.0 {
+                    ui.set_edit_busy(false);
+                    ui.set_edit_status_text("비디오 해상도를 알 수 없어 크롭을 실행할 수 없습니다.".into());
+                    return;
+                }
+                let mut pw = ((cw * vw).round() as i32).clamp(2, vw as i32);
+                let mut ph = ((ch * vh).round() as i32).clamp(2, vh as i32);
+                pw -= pw % 2;
+                ph -= ph % 2;
+                pw = pw.max(2);
+                ph = ph.max(2);
+                let mut px = ((cx * vw).round() as i32).clamp(0, vw as i32 - pw);
+                let mut py = ((cy * vh).round() as i32).clamp(0, vh as i32 - ph);
+                px -= px % 2;
+                py -= py % 2;
+                px = px.clamp(0, vw as i32 - pw);
+                py = py.clamp(0, vh as i32 - ph);
+                let filter = format!("crop={}:{}:{}:{}", pw, ph, px, py);
+                let crf = ui.get_crf_value() as i32;
+                let out = src.with_file_name(format!("{}_crop.mp4", stem));
+                ui.set_edit_status_text(format!("크롭+컷 시작 ({}): {}", filter, src.display()).into());
+                tokio::spawn(do_crop(weak.clone(), ffmpeg, src, out, start, dur, filter, crf, "크롭+컷".to_string()));
+            }
         });
     }
 
