@@ -28,6 +28,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use windows_sys::Win32::System::Ole::RevokeDragDrop;
 
 static APP_WINDOW_HANDLE: OnceLock<slint::Weak<MainWindow>> = OnceLock::new();
+/// ffplay 를 찾지 못했을 때 상태 표시줄 경고를 한 번만 띄우기 위한 플래그
+static FFPLAY_WARNED: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "windows")]
 static mut ORIGINAL_WNDPROC: WNDPROC = None;
 
@@ -108,10 +110,29 @@ fn preview_size(vw: f32, vh: f32) -> (u32, u32) {
     (w as u32, h as u32)
 }
 
+/// ffplay(오디오)가 오디오 장치를 초기화하고 소리를 내기 시작할 때까지의 대기 시간(초).
+/// 이 시간만큼 영상 프레임 표시를 늦춰 재생 시작 시점의 A/V 싱크를 맞춘다.
+const AUDIO_START_DELAY: f32 = 0.25;
+
+/// ffplay(오디오 재생용) 실행 파일 경로를 찾는다.
+/// ffmpeg.exe 와 같은 폴더의 ffplay.exe 를 우선 사용하고, 없으면 PATH 에서 찾는다.
+fn resolve_ffplay(ffmpeg: &str) -> Option<String> {
+    let exe_name = if cfg!(windows) { "ffplay.exe" } else { "ffplay" };
+    let sibling = Path::new(ffmpeg).with_file_name(exe_name);
+    if sibling.is_file() {
+        return Some(sibling.to_string_lossy().to_string());
+    }
+    which::which("ffplay")
+        .ok()
+        .map(|p| p.to_string_lossy().to_string())
+}
+
 struct FrameRequester {
     state: std::sync::Mutex<FrameState>,
     stream: std::sync::Mutex<Option<tokio::process::Child>>,
     stream_id: AtomicU64,
+    /// 오디오 재생용 ffplay 프로세스 (영상 프레임 스트림과 병렬로 재생)
+    audio: std::sync::Mutex<Option<tokio::process::Child>>,
 }
 
 /// 프레임 요청 상태. busy/pending 을 하나의 락으로 관리해
@@ -211,6 +232,14 @@ impl FrameRequester {
                 let _ = child.wait().await;
             });
         }
+        // 오디오(ffplay) 프로세스도 함께 종료한다.
+        let audio = self.audio.lock().unwrap().take();
+        if let Some(mut audio) = audio {
+            let _ = audio.start_kill();
+            tokio::spawn(async move {
+                let _ = audio.wait().await;
+            });
+        }
     }
 
     /// ffmpeg 프로세스 하나로 프레임을 연속 수신하며 실시간 재생한다.
@@ -229,6 +258,42 @@ impl FrameRequester {
         let frame_bytes = (pw as usize) * (ph as usize) * 4;
         self.stop_playback();
         let id = self.stream_id.fetch_add(1, Ordering::SeqCst) + 1;
+
+        // 오디오 재생: ffplay 로 소리만 재생한다 (영상은 아래 ffmpeg 프레임 스트림이 담당).
+        // ffplay 를 찾지 못하면 조용히 소리 없이 재생을 계속한다.
+        let audio_on = match resolve_ffplay(&ffmpeg) {
+            Some(ffplay) => {
+                let mut acmd = Command::new(&ffplay);
+                #[cfg(windows)]
+                acmd.creation_flags(0x08000000);
+                acmd.args(["-nodisp", "-vn", "-autoexit", "-loglevel", "quiet", "-ss"])
+                    .arg(format!("{:.3}", t0))
+                    .arg("-i")
+                    .arg(&path)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .stdin(Stdio::null());
+                match acmd.spawn() {
+                    Ok(c) => {
+                        *self.audio.lock().unwrap() = Some(c);
+                        true
+                    }
+                    Err(_) => false,
+                }
+            }
+            None => {
+                if !FFPLAY_WARNED.swap(true, Ordering::SeqCst) {
+                    let w = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = w.upgrade() {
+                            ui.set_edit_status_text("ffplay 를 찾을 수 없어 소리 없이 재생합니다.".into());
+                        }
+                    });
+                }
+                false
+            }
+        };
+
         let mut cmd = Command::new(&ffmpeg);
         #[cfg(windows)]
         cmd.creation_flags(0x08000000);
@@ -273,6 +338,14 @@ impl FrameRequester {
         let w = weak.clone();
         tokio::spawn(async move {
             let fps = if fps > 0.5 { fps } else { 30.0 };
+            // 오디오(ffplay)가 준비될 때까지 잠시 기다렸다가 영상 프레임 표시를 시작해
+            // 재생 시작 시점의 A/V 싱크를 맞춘다.
+            if audio_on {
+                tokio::time::sleep(std::time::Duration::from_secs_f32(AUDIO_START_DELAY)).await;
+                if this.stream_id.load(Ordering::SeqCst) != id {
+                    return;
+                }
+            }
             let start_wall = Instant::now();
             let mut idx: u32 = 0;
             let mut natural_end = false;
@@ -326,6 +399,13 @@ impl FrameRequester {
                     let _ = child.start_kill();
                     tokio::spawn(async move {
                         let _ = child.wait().await;
+                    });
+                }
+                // 오디오(ffplay)도 함께 종료한다.
+                if let Some(mut audio) = this.audio.lock().unwrap().take() {
+                    let _ = audio.start_kill();
+                    tokio::spawn(async move {
+                        let _ = audio.wait().await;
                     });
                 }
             }
@@ -964,6 +1044,7 @@ async fn main() -> Result<()> {
         state: std::sync::Mutex::new(FrameState { busy: false, pending: None }),
         stream: std::sync::Mutex::new(None),
         stream_id: AtomicU64::new(0),
+        audio: std::sync::Mutex::new(None),
     });
 
     fn load_video_async(
