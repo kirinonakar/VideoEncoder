@@ -33,6 +33,106 @@ static FFPLAY_WARNED: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "windows")]
 static mut ORIGINAL_WNDPROC: WNDPROC = None;
 
+/// Windows 작업표시줄의 앱 아이콘에 진행률을 표시한다.
+///
+/// 작업표시줄 COM 객체는 호출한 스레드의 COM 초기화 상태에 영향을 받으므로,
+/// 각 업데이트에서 짧은 수명으로 생성하고 해제한다. 이렇게 하면 FFmpeg를
+/// 감시하는 Tokio 작업 스레드에서도 안전하게 갱신할 수 있다.
+#[cfg(target_os = "windows")]
+mod taskbar_progress {
+    use std::ffi::c_void;
+    use std::sync::atomic::{AtomicIsize, Ordering};
+    use std::sync::Arc;
+
+    use windows::Win32::Foundation::{HWND, RPC_E_CHANGED_MODE, S_FALSE, S_OK};
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_SERVER, COINIT_MULTITHREADED,
+    };
+    use windows::Win32::UI::Shell::{
+        ITaskbarList3, TBPF_NORMAL, TBPF_NOPROGRESS, TaskbarList,
+    };
+
+    #[derive(Clone)]
+    pub struct TaskbarProgress {
+        hwnd: Arc<AtomicIsize>,
+    }
+
+    impl TaskbarProgress {
+        pub fn new() -> Self {
+            Self {
+                hwnd: Arc::new(AtomicIsize::new(0)),
+            }
+        }
+
+        pub fn set_hwnd(&self, hwnd: isize) {
+            self.hwnd.store(hwnd, Ordering::Release);
+        }
+
+        pub fn set_progress(&self, progress: f32) {
+            let completed = (progress.clamp(0.0, 1.0) * 10_000.0).round() as u64;
+            self.with_taskbar(|taskbar, hwnd| unsafe {
+                let _ = taskbar.SetProgressState(hwnd, TBPF_NORMAL);
+                let _ = taskbar.SetProgressValue(hwnd, completed, 10_000);
+            });
+        }
+
+        pub fn clear(&self) {
+            self.with_taskbar(|taskbar, hwnd| unsafe {
+                let _ = taskbar.SetProgressState(hwnd, TBPF_NOPROGRESS);
+            });
+        }
+
+        fn with_taskbar(&self, callback: impl FnOnce(&ITaskbarList3, HWND)) {
+            let raw_hwnd = self.hwnd.load(Ordering::Acquire);
+            if raw_hwnd == 0 {
+                return;
+            }
+
+            unsafe {
+                let com_init = CoInitializeEx(None, COINIT_MULTITHREADED);
+                let com_is_ready = com_init == S_OK
+                    || com_init == S_FALSE
+                    || com_init == RPC_E_CHANGED_MODE;
+                if !com_is_ready {
+                    return;
+                }
+
+                if let Ok(taskbar) = CoCreateInstance::<_, ITaskbarList3>(
+                    &TaskbarList,
+                    None,
+                    CLSCTX_SERVER,
+                ) {
+                    if taskbar.HrInit().is_ok() {
+                        callback(&taskbar, HWND(raw_hwnd as *mut c_void));
+                    }
+                }
+
+                if com_init == S_OK || com_init == S_FALSE {
+                    CoUninitialize();
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+mod taskbar_progress {
+    #[derive(Clone, Default)]
+    pub struct TaskbarProgress;
+
+    impl TaskbarProgress {
+        pub fn new() -> Self {
+            Self
+        }
+
+        pub fn set_hwnd(&self, _hwnd: isize) {}
+        pub fn set_progress(&self, _progress: f32) {}
+        pub fn clear(&self) {}
+    }
+}
+
+use taskbar_progress::TaskbarProgress;
+
 #[cfg(target_os = "windows")]
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
@@ -659,7 +759,17 @@ async fn watch_progress(mut child: tokio::process::Child, total_dur: f32, on_pro
     }
 }
 
-async fn do_cut(weak: slint::Weak<MainWindow>, ffmpeg: String, src: PathBuf, out: PathBuf, start: f32, dur: f32, label: String) {
+async fn do_cut(
+    weak: slint::Weak<MainWindow>,
+    ffmpeg: String,
+    src: PathBuf,
+    out: PathBuf,
+    start: f32,
+    dur: f32,
+    label: String,
+    taskbar: TaskbarProgress,
+) {
+    taskbar.set_progress(0.0);
     let mut cmd = Command::new(&ffmpeg);
     #[cfg(windows)]
     cmd.creation_flags(0x08000000);
@@ -680,6 +790,7 @@ async fn do_cut(weak: slint::Weak<MainWindow>, ffmpeg: String, src: PathBuf, out
     let child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
+            taskbar.clear();
             let _ = slint::invoke_from_event_loop({
                 let weak = weak.clone();
                 move || {
@@ -692,9 +803,11 @@ async fn do_cut(weak: slint::Weak<MainWindow>, ffmpeg: String, src: PathBuf, out
             return;
         }
     };
+    let taskbar_for_progress = taskbar.clone();
     let ok = watch_progress(child, dur, {
         let weak = weak.clone();
         move |pct| {
+            taskbar_for_progress.set_progress(pct);
             let weak2 = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = weak2.upgrade() {
@@ -704,6 +817,7 @@ async fn do_cut(weak: slint::Weak<MainWindow>, ffmpeg: String, src: PathBuf, out
         }
     })
     .await;
+    taskbar.clear();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(ui) = weak.upgrade() {
             ui.set_edit_busy(false);
@@ -717,7 +831,19 @@ async fn do_cut(weak: slint::Weak<MainWindow>, ffmpeg: String, src: PathBuf, out
     });
 }
 
-async fn do_crop(weak: slint::Weak<MainWindow>, ffmpeg: String, src: PathBuf, out: PathBuf, start: f32, dur: f32, filter: String, crf: i32, label: String) {
+async fn do_crop(
+    weak: slint::Weak<MainWindow>,
+    ffmpeg: String,
+    src: PathBuf,
+    out: PathBuf,
+    start: f32,
+    dur: f32,
+    filter: String,
+    crf: i32,
+    label: String,
+    taskbar: TaskbarProgress,
+) {
+    taskbar.set_progress(0.0);
     let mut cmd = Command::new(&ffmpeg);
     #[cfg(windows)]
     cmd.creation_flags(0x08000000);
@@ -740,6 +866,7 @@ async fn do_crop(weak: slint::Weak<MainWindow>, ffmpeg: String, src: PathBuf, ou
     let child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
+            taskbar.clear();
             let _ = slint::invoke_from_event_loop({
                 let weak = weak.clone();
                 move || {
@@ -752,9 +879,11 @@ async fn do_crop(weak: slint::Weak<MainWindow>, ffmpeg: String, src: PathBuf, ou
             return;
         }
     };
+    let taskbar_for_progress = taskbar.clone();
     let ok = watch_progress(child, dur, {
         let weak = weak.clone();
         move |pct| {
+            taskbar_for_progress.set_progress(pct);
             let weak2 = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = weak2.upgrade() {
@@ -764,6 +893,7 @@ async fn do_crop(weak: slint::Weak<MainWindow>, ffmpeg: String, src: PathBuf, ou
         }
     })
     .await;
+    taskbar.clear();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(ui) = weak.upgrade() {
             ui.set_edit_busy(false);
@@ -782,6 +912,7 @@ async fn main() -> Result<()> {
     let main_window = MainWindow::new()?;
     let ui_weak = main_window.as_weak();
     let _ = APP_WINDOW_HANDLE.set(ui_weak.clone());
+    let taskbar_progress = TaskbarProgress::new();
 
     // 1. Initial FFmpeg setup
     let initial_ffmpeg = if Path::new("./ffmpeg.exe").exists() {
@@ -910,6 +1041,7 @@ async fn main() -> Result<()> {
         let weak = ui_weak.clone();
         let model = files_model.clone();
         let signal = stop_signal.clone();
+        let taskbar = taskbar_progress.clone();
         
         main_window.on_start_encoding(move || {
             let ui = weak.upgrade().unwrap();
@@ -938,8 +1070,10 @@ async fn main() -> Result<()> {
 
             let weak_task = weak.clone();
             let signal_task = signal.clone();
+            let taskbar_task = taskbar.clone();
 
             tokio::spawn(async move {
+                taskbar_task.set_progress(0.0);
                 let total_files = file_paths.len();
                 let mut success_count = 0;
                 let batch_start_time = Instant::now();
@@ -1082,6 +1216,7 @@ async fn main() -> Result<()> {
                             };
                             
                             let overall_pc = file_base_progress + (cur_file_pc / total_files as f32);
+                            taskbar_task.set_progress(overall_pc);
                             
                             // Calculate real elapsed time and estimated total/remaining wall-clock time for the current file
                             let (file_est_total, remaining_file_time) = if cur_file_pc > 0.01 {
@@ -1162,6 +1297,7 @@ async fn main() -> Result<()> {
                         ui.set_is_encoding(false);
                     }
                 });
+                taskbar_task.clear();
             });
         });
     }
@@ -1507,6 +1643,7 @@ async fn main() -> Result<()> {
     {
         let weak = ui_weak.clone();
         let requester = frame_requester.clone();
+        let taskbar = taskbar_progress.clone();
         main_window.on_run_cut(move || {
             if let Some(ui) = weak.upgrade() {
                 requester.stop_playback();
@@ -1534,7 +1671,16 @@ async fn main() -> Result<()> {
                 ui.set_edit_busy(true);
                 ui.set_edit_progress(0.0);
                 ui.set_edit_status_text(format!("잘라내기 시작: {}", src.display()).into());
-                tokio::spawn(do_cut(weak.clone(), ffmpeg, src, out, start, dur, "잘라내기".to_string()));
+                tokio::spawn(do_cut(
+                    weak.clone(),
+                    ffmpeg,
+                    src,
+                    out,
+                    start,
+                    dur,
+                    "잘라내기".to_string(),
+                    taskbar.clone(),
+                ));
             }
         });
     }
@@ -1543,6 +1689,7 @@ async fn main() -> Result<()> {
     {
         let weak = ui_weak.clone();
         let requester = frame_requester.clone();
+        let taskbar = taskbar_progress.clone();
         main_window.on_run_crop(move || {
             if let Some(ui) = weak.upgrade() {
                 requester.stop_playback();
@@ -1578,7 +1725,16 @@ async fn main() -> Result<()> {
                     let ext = src.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_else(|| "mp4".to_string());
                     let out = src.with_file_name(format!("{}_cut.{}", stem, ext));
                     ui.set_edit_status_text("크롭 영역이 전체이므로 무손실 잘라내기로 실행합니다.".into());
-                    tokio::spawn(do_cut(weak.clone(), ffmpeg, src, out, start, dur, "잘라내기".to_string()));
+                    tokio::spawn(do_cut(
+                        weak.clone(),
+                        ffmpeg,
+                        src,
+                        out,
+                        start,
+                        dur,
+                        "잘라내기".to_string(),
+                        taskbar.clone(),
+                    ));
                     return;
                 }
                 if vw <= 0.0 || vh <= 0.0 {
@@ -1602,7 +1758,18 @@ async fn main() -> Result<()> {
                 let crf = ui.get_crf_value() as i32;
                 let out = src.with_file_name(format!("{}_crop.mp4", stem));
                 ui.set_edit_status_text(format!("크롭+컷 시작 ({}): {}", filter, src.display()).into());
-                tokio::spawn(do_crop(weak.clone(), ffmpeg, src, out, start, dur, filter, crf, "크롭+컷".to_string()));
+                tokio::spawn(do_crop(
+                    weak.clone(),
+                    ffmpeg,
+                    src,
+                    out,
+                    start,
+                    dur,
+                    filter,
+                    crf,
+                    "크롭+컷".to_string(),
+                    taskbar.clone(),
+                ));
             }
         });
     }
@@ -1611,6 +1778,7 @@ async fn main() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
         let ui_handle_clone = ui_weak.clone();
+        let taskbar_clone = taskbar_progress.clone();
         slint::Timer::single_shot(std::time::Duration::from_millis(300), move || {
             if let Some(ui) = ui_handle_clone.upgrade() {
                 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -1619,6 +1787,7 @@ async fn main() -> Result<()> {
                 if let Ok(handle) = window_handle.window_handle() {
                     if let RawWindowHandle::Win32(h) = handle.as_raw() {
                         let hwnd = h.hwnd.get() as HWND;
+                        taskbar_clone.set_hwnd(h.hwnd.get());
                         println!("Slint HWND success (deferred): {:?}", hwnd);
 
                         unsafe {
