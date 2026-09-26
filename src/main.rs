@@ -770,6 +770,8 @@ async fn do_cut(
     taskbar: TaskbarProgress,
 ) {
     taskbar.set_progress(0.0);
+    // 작업이 끝날 때까지 `_incomplete`를 붙여 두고, 완료되면 제거(이름 복원)
+    let incomplete = incomplete_output_path(&out);
     let mut cmd = Command::new(&ffmpeg);
     #[cfg(windows)]
     cmd.creation_flags(0x08000000);
@@ -783,7 +785,7 @@ async fn do_cut(
         .arg("-map").arg("0")
         .arg("-map_metadata").arg("0")
         .arg("-progress").arg("pipe:2")
-        .arg(&out)
+        .arg(&incomplete)
         .stderr(Stdio::piped())
         .stdout(Stdio::null())
         .stdin(Stdio::null());
@@ -818,6 +820,10 @@ async fn do_cut(
     })
     .await;
     taskbar.clear();
+    if ok {
+        // 완료: `_incomplete`를 제거하고 최종 파일명으로 복원
+        finalize_output(&incomplete, &out);
+    }
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(ui) = weak.upgrade() {
             ui.set_edit_busy(false);
@@ -844,6 +850,8 @@ async fn do_crop(
     taskbar: TaskbarProgress,
 ) {
     taskbar.set_progress(0.0);
+    // 작업이 끝날 때까지 `_incomplete`를 붙여 두고, 완료되면 제거(이름 복원)
+    let incomplete = incomplete_output_path(&out);
     let mut cmd = Command::new(&ffmpeg);
     #[cfg(windows)]
     cmd.creation_flags(0x08000000);
@@ -855,11 +863,16 @@ async fn do_crop(
         .arg("-vf").arg(&filter)
         .arg("-c:v").arg("libx265")
         .arg("-crf").arg(crf.to_string())
-        .arg("-preset").arg("medium")
-        .arg("-c:a").arg("copy")
-        .arg("-map_metadata").arg("0")
+        .arg("-preset").arg("medium");
+    if is_webm_file(&src) {
+        // WebM의 Opus/Vorbis 오디오는 MP4 컨테이너에 그대로 넣을 수 없어 AAC로 변환한다.
+        cmd.arg("-c:a").arg("aac");
+    } else {
+        cmd.arg("-c:a").arg("copy");
+    }
+    cmd.arg("-map_metadata").arg("0")
         .arg("-progress").arg("pipe:2")
-        .arg(&out)
+        .arg(&incomplete)
         .stderr(Stdio::piped())
         .stdout(Stdio::null())
         .stdin(Stdio::null());
@@ -894,6 +907,10 @@ async fn do_crop(
     })
     .await;
     taskbar.clear();
+    if ok {
+        // 완료: `_incomplete`를 제거하고 최종 파일명으로 복원
+        finalize_output(&incomplete, &out);
+    }
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(ui) = weak.upgrade() {
             ui.set_edit_busy(false);
@@ -905,6 +922,31 @@ async fn do_crop(
             }
         }
     });
+}
+
+/// 작업이 진행 중임을 나타내는 `_incomplete` 접미사가 붙은 경로를 만든다.
+/// (예: `video_h265.mp4` -> `video_h265_incomplete.mp4`)
+fn incomplete_output_path(path: &Path) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    match path.extension().map(|e| e.to_string_lossy().to_string()) {
+        Some(ext) if !ext.is_empty() => path.with_file_name(format!("{}_incomplete.{}", stem, ext)),
+        _ => path.with_file_name(format!("{}_incomplete", stem)),
+    }
+}
+
+/// 작업이 끝난 뒤 `_incomplete` 파일을 최종 파일명으로 되돌린다.
+fn finalize_output(incomplete: &Path, output: &Path) {
+    if !incomplete.exists() {
+        return;
+    }
+    if std::fs::rename(incomplete, output).is_err() {
+        // 최종 파일이 사용 중이면 지우고 한 번 더 시도한다.
+        let _ = std::fs::remove_file(output);
+        let _ = std::fs::rename(incomplete, output);
+    }
 }
 
 #[tokio::main]
@@ -978,7 +1020,7 @@ async fn main() -> Result<()> {
         let model = files_model.clone();
         main_window.on_pick_files(move || {
             if let Some(paths) = rfd::FileDialog::new()
-                .add_filter("Video", &["mp4", "mkv", "avi", "mov", "wmv", "flv", "mpg", "mpeg"])
+                .add_filter("Video", &["mp4", "mkv", "avi", "mov", "wmv", "flv", "mpg", "mpeg", "webm"])
                 .pick_files()
             {
                 for p in paths {
@@ -1099,6 +1141,8 @@ async fn main() -> Result<()> {
                     };
                     
                     let output_path = output_parent.join(output_name);
+                    // 인코딩이 끝날 때까지 `_incomplete`를 붙여 두고, 완료되면 제거(이름 복원)
+                    let incomplete_path = incomplete_output_path(&output_path);
 
                     let base_msg = format!("[{}/{}] {}", idx + 1, total_files, input_path.file_name().unwrap_or_default().to_string_lossy());
                     let _ = slint::invoke_from_event_loop({
@@ -1122,10 +1166,15 @@ async fn main() -> Result<()> {
                         .arg("-i").arg(input_path)
                         .arg("-c:v").arg("libx265")
                         .arg("-crf").arg(crf.to_string())
-                        .arg("-preset").arg("medium")
-                        .arg("-c:a").arg("copy")
-                        .arg("-progress").arg("pipe:2")
-                        .arg(&output_path)
+                        .arg("-preset").arg("medium");
+                    if is_webm_file(input_path) {
+                        // WebM의 Opus/Vorbis 오디오는 MP4 컨테이너에 그대로 넣을 수 없어 AAC로 변환한다.
+                        cmd.arg("-c:a").arg("aac");
+                    } else {
+                        cmd.arg("-c:a").arg("copy");
+                    }
+                    cmd.arg("-progress").arg("pipe:2")
+                        .arg(&incomplete_path)
                         .stderr(Stdio::piped())
                         .stdin(Stdio::null())
                         .stdout(Stdio::null());
@@ -1266,18 +1315,13 @@ async fn main() -> Result<()> {
                     }
 
                     match child.wait().await {
-                        Ok(status) if status.success() => {
-                            if !signal_task.load(Ordering::SeqCst) {
-                                success_count += 1;
-                            } else {
-                                if output_path.exists() { let _ = std::fs::remove_file(&output_path); }
-                            }
+                        // 완료: `_incomplete` 제거 후 최종 파일명으로 복원
+                        Ok(status) if status.success() && !signal_task.load(Ordering::SeqCst) => {
+                            finalize_output(&incomplete_path, &output_path);
+                            success_count += 1;
                         }
-                        _ => {
-                            if signal_task.load(Ordering::SeqCst) && output_path.exists() {
-                                let _ = std::fs::remove_file(&output_path);
-                            }
-                        }
+                        // 중지/실패 시에는 미완성 파일(`_incomplete`)을 삭제하지 않고 남긴다.
+                        _ => {}
                     }
                 }
 
@@ -1428,7 +1472,7 @@ async fn main() -> Result<()> {
         main_window.on_pick_video(move || {
             if let Some(ui) = weak.upgrade() {
                 if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Video", &["mp4", "mkv", "avi", "mov", "wmv", "flv", "mpg", "mpeg"])
+                    .add_filter("Video", &["mp4", "mkv", "avi", "mov", "wmv", "flv", "mpg", "mpeg", "webm"])
                     .pick_file()
                 {
                     let ffmpeg = ui.get_ffmpeg_path().to_string();
@@ -1831,5 +1875,11 @@ async fn main() -> Result<()> {
 
 fn is_video_file(path: &Path) -> bool {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-    matches!(ext.as_str(), "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "mpg" | "mpeg")
+    matches!(ext.as_str(), "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "mpg" | "mpeg" | "webm")
+}
+
+/// WebM 파일인지 확인한다. WebM의 Opus/Vorbis 오디오는 MP4 컨테이너와 호환이 안 되어
+/// 인코딩(MP4 출력) 시 AAC로 변환해야 한다.
+fn is_webm_file(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("webm")).unwrap_or(false)
 }
