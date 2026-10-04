@@ -227,6 +227,41 @@ fn resolve_ffplay(ffmpeg: &str) -> Option<String> {
         .map(|p| p.to_string_lossy().to_string())
 }
 
+/// 재생과 검증에서 같은 미리보기 디코더 명령을 사용한다.
+fn preview_playback_command(ffmpeg: &str, path: &Path, t0: f32, pw: u32, ph: u32) -> Command {
+    let mut cmd = Command::new(ffmpeg);
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000);
+    cmd.args(["-hide_banner", "-loglevel", "error", "-ss"])
+        .arg(format!("{:.3}", t0))
+        .arg("-i")
+        .arg(path)
+        .args(["-an", "-sn", "-vf"])
+        .arg(format!("scale={}:{},setsar=1", pw, ph))
+        // FFmpeg 9에서는 -vsync가 제거되었다. 기존 -vsync 0과 같은 동작이다.
+        .args(["-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgba", "-y", "pipe:1"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null());
+    cmd
+}
+
+/// stderr를 계속 비워 디코더가 막히지 않게 하되, 오류 표시는 마지막 8 KiB로 제한한다.
+async fn read_preview_errors(mut stderr: tokio::process::ChildStderr) -> String {
+    let mut tail = Vec::new();
+    let mut buf = [0u8; 4096];
+    while let Ok(n) = stderr.read(&mut buf).await {
+        if n == 0 {
+            break;
+        }
+        tail.extend_from_slice(&buf[..n]);
+        if tail.len() > 8192 {
+            tail.drain(..tail.len() - 8192);
+        }
+    }
+    String::from_utf8_lossy(&tail).trim().to_owned()
+}
+
 struct FrameRequester {
     state: std::sync::Mutex<FrameState>,
     stream: std::sync::Mutex<Option<tokio::process::Child>>,
@@ -476,19 +511,7 @@ impl FrameRequester {
             }
         };
 
-        let mut cmd = Command::new(&ffmpeg);
-        #[cfg(windows)]
-        cmd.creation_flags(0x08000000);
-        cmd.args(["-hide_banner", "-loglevel", "error", "-ss"])
-            .arg(format!("{:.3}", t0))
-            .arg("-i")
-            .arg(&path)
-            .args(["-an", "-sn", "-vf"])
-            .arg(format!("scale={}:{},setsar=1", pw, ph))
-            .args(["-vsync", "0", "-f", "rawvideo", "-pix_fmt", "rgba", "-y", "pipe:1"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .stdin(Stdio::null());
+        let mut cmd = preview_playback_command(&ffmpeg, &path, t0, pw, ph);
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -515,6 +538,7 @@ impl FrameRequester {
                 return;
             }
         };
+        let errors = child.stderr.take().map(|stderr| tokio::spawn(read_preview_errors(stderr)));
         *self.stream.lock().unwrap() = Some(child);
         let this = self.clone();
         let w = weak.clone();
@@ -525,12 +549,14 @@ impl FrameRequester {
             //    대기 시간이 길어진다. 이 시간 동안 오디오를 먼저 켜면 소리가 영상보다
             //    앞서가므로, 영상 준비가 끝난 뒤에 오디오를 시작한다.
             let mut first_frame: Option<Vec<u8>> = None;
-            let mut natural_end = false;
+            let mut decoder_eof = false;
+            let mut playback_error = None;
             {
                 let mut buf = vec![0u8; frame_bytes];
                 match read_exact_or_eof(&mut stdout, &mut buf).await {
                     Ok(true) => first_frame = Some(buf),
-                    Ok(false) | Err(_) => natural_end = true,
+                    Ok(false) => decoder_eof = true,
+                    Err(e) => playback_error = Some(e.to_string()),
                 }
             }
 
@@ -574,7 +600,7 @@ impl FrameRequester {
             let start_wall = Instant::now();
             let mut idx: u32 = 0;
             let mut pending = first_frame;
-            loop {
+            while !decoder_eof && playback_error.is_none() {
                 if this.stream_id.load(Ordering::SeqCst) != id {
                     break;
                 }
@@ -585,10 +611,13 @@ impl FrameRequester {
                         match read_exact_or_eof(&mut stdout, &mut b).await {
                             Ok(true) => b,
                             Ok(false) => {
-                                natural_end = true;
+                                decoder_eof = true;
                                 break;
                             }
-                            Err(_) => break,
+                            Err(e) => {
+                                playback_error = Some(e.to_string());
+                                break;
+                            }
                         }
                     }
                 };
@@ -596,7 +625,6 @@ impl FrameRequester {
                 idx += 1;
                 let media_t = t0 + rel;
                 if media_t > dur {
-                    natural_end = true;
                     break;
                 }
                 // 실제 재생 속도에 맞춰 프레임 표시 시점을 조절한다 (실시간 재생).
@@ -623,24 +651,45 @@ impl FrameRequester {
                     }
                 });
             }
-            // 자연 종료(영상 끝)면 프로세스를 정리하고 재생 상태를 해제한다.
+            // EOF와 디코더 실패를 구분하고, 취소된 이전 재생은 현재 UI를 바꾸지 않는다.
             if this.stream_id.load(Ordering::SeqCst) == id {
-                if let Some(mut child) = this.stream.lock().unwrap().take() {
-                    let _ = child.start_kill();
-                    tokio::spawn(async move {
-                        let _ = child.wait().await;
-                    });
+                let child = this.stream.lock().unwrap().take();
+                if let Some(mut child) = child {
+                    if !decoder_eof {
+                        let _ = child.start_kill();
+                    }
+                    match child.wait().await {
+                        Ok(status) if decoder_eof && !status.success() => {
+                            playback_error = Some(format!("FFmpeg {}", status));
+                        }
+                        Err(e) => playback_error = Some(e.to_string()),
+                        _ => {}
+                    }
+                }
+                let detail = match errors {
+                    Some(errors) => errors.await.unwrap_or_default(),
+                    None => String::new(),
+                };
+                if playback_error.is_some() && !detail.is_empty() {
+                    playback_error = Some(detail);
+                }
+                if this.stream_id.load(Ordering::SeqCst) != id {
+                    return;
                 }
                 // 오디오(ffplay)도 함께 종료한다.
                 if let Some(audio) = this.audio.lock().unwrap().take() {
                     kill_audio_playback(audio);
                 }
-            }
-            if natural_end {
                 let w2 = w.clone();
                 let _ = slint::invoke_from_event_loop(move || {
+                    if this.stream_id.load(Ordering::SeqCst) != id {
+                        return;
+                    }
                     if let Some(ui) = w2.upgrade() {
                         ui.set_is_playing(false);
+                        if let Some(error) = playback_error {
+                            ui.set_edit_status_text(format!("재생 실패: {}", error).into());
+                        }
                     }
                 });
             }
@@ -1882,4 +1931,65 @@ fn is_video_file(path: &Path) -> bool {
 /// 인코딩(MP4 출력) 시 AAC로 변환해야 한다.
 fn is_webm_file(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("webm")).unwrap_or(false)
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn frame_reader_distinguishes_complete_frames_from_eof() {
+        let mut input = &b"abcdefghij"[..];
+        let mut frame = [0u8; 4];
+        assert!(read_exact_or_eof(&mut input, &mut frame).await.unwrap());
+        assert_eq!(&frame, b"abcd");
+        assert!(read_exact_or_eof(&mut input, &mut frame).await.unwrap());
+        assert_eq!(&frame, b"efgh");
+        assert!(!read_exact_or_eof(&mut input, &mut frame).await.unwrap());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires FFmpeg and VIDEOENCODER_TEST_VIDEO pointing to heart_ani.mp4"]
+    async fn heart_animation_decodes_to_eof_and_after_seek() {
+        let ffmpeg = which::which("ffmpeg").unwrap().to_string_lossy().into_owned();
+        let path = PathBuf::from(std::env::var_os("VIDEOENCODER_TEST_VIDEO").unwrap());
+        let (dur, w, h, fps) = probe_video(&ffmpeg, &path).await.unwrap();
+        assert!((dur - 18.133333).abs() < 0.01);
+        assert_eq!((w, h, fps), (680.0, 1440.0, 30.0));
+        let (pw, ph) = preview_size(w, h);
+        for (t0, expected_frames) in [(0.0, 544), (9.0, 274), (17.8, 10)] {
+            let mut child = preview_playback_command(&ffmpeg, &path, t0, pw, ph).spawn().unwrap();
+            let mut stdout = child.stdout.take().unwrap();
+            let errors = tokio::spawn(read_preview_errors(child.stderr.take().unwrap()));
+            let mut buf = vec![0; (pw * ph * 4) as usize];
+            let mut frames = 0;
+            while read_exact_or_eof(&mut stdout, &mut buf).await.unwrap() {
+                frames += 1;
+            }
+            let status = child.wait().await.unwrap();
+            let detail = errors.await.unwrap();
+            assert!(status.success(), "seek {t0}: {detail}");
+            assert_eq!(frames, expected_frames, "seek {t0}: {detail}");
+            println!("seek {t0:.1}s: {frames} complete RGBA frames, {pw}x{ph}");
+        }
+        // 단일 프레임 시크도 같은 파일에서 정상 작동해야 한다.
+        let frame = extract_frame(&ffmpeg, &path, 9.0, pw, ph).await.unwrap();
+        assert_eq!(frame.len(), (pw * ph * 4) as usize);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires FFmpeg"]
+    async fn decoder_failure_preserves_ffmpeg_error() {
+        let ffmpeg = which::which("ffmpeg").unwrap().to_string_lossy().into_owned();
+        let path = std::env::temp_dir().join(format!("videoencoder-missing-{}.mp4", std::process::id()));
+        assert!(!path.exists());
+        let mut child = preview_playback_command(&ffmpeg, &path, 0.0, 2, 2).spawn().unwrap();
+        let errors = tokio::spawn(read_preview_errors(child.stderr.take().unwrap()));
+        let mut frame = [0u8; 16];
+        assert!(!read_exact_or_eof(&mut child.stdout.take().unwrap(), &mut frame).await.unwrap());
+        assert!(!child.wait().await.unwrap().success());
+        let detail = errors.await.unwrap();
+        assert!(detail.contains("Error opening input"), "{detail}");
+        assert!(detail.contains("videoencoder-missing-"), "{detail}");
+    }
 }
