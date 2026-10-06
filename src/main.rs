@@ -824,6 +824,7 @@ fn add_encoder_args(cmd: &mut Command, encoder: i32, quality: i32) {
     if encoder == 1 {
         // NVENC(GPU): VBR + CQ 기반 상수 품질 모드
         cmd.arg("-c:v").arg("hevc_nvenc")
+            .arg("-preset").arg("p7")
             .arg("-rc").arg("vbr")
             .arg("-cq").arg(quality.to_string())
             .arg("-b:v").arg("0");
