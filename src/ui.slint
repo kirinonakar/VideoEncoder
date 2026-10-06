@@ -1,4 +1,4 @@
-import { Button, LineEdit, Slider, HorizontalBox, VerticalBox, ProgressIndicator, ScrollView, CheckBox, TabWidget } from "std-widgets.slint";
+import { Button, ComboBox, LineEdit, Slider, HorizontalBox, VerticalBox, ProgressIndicator, ScrollView, CheckBox, TabWidget } from "std-widgets.slint";
 
 // Custom ComboBox: 긴 파일명은 "…"으로 생략(elide)하고 드롭다운 화살표는 항상 표시한다.
 component VideoFileComboBox {
@@ -209,7 +209,10 @@ export component MainWindow inherits Window {
     // Properties from/to Rust
     in-out property <string> ffmpeg-path: "";
     in-out property <string> output-suffix: "_h265";
+    // 0 = x265 (CPU), 1 = NVENC (hevc_nvenc)
+    in-out property <int> encoder-index: 0;
     in-out property <float> crf-value: 19.0;
+    in-out property <float> cq-value: 17.0;
     in-out property <string> output-folder: "";
     in-out property <[string]> file-list: [];
     in-out property <float> overall-progress: 0.0;
@@ -306,18 +309,33 @@ export component MainWindow inherits Window {
 
                 HorizontalLayout {
                     spacing: 12px;
+                    Text { text: "인코더:"; color: #1d1d1f; vertical-alignment: center; width: 100px; font-weight: 500; }
+                    ComboBox {
+                        model: ["x265 (CPU)", "NVENC (H.265)"];
+                        current-index <=> encoder-index;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 12px;
                     VerticalLayout {
                         width: 100px;
                         alignment: center;
-                        Text { text: "화질 (CRF):"; color: #1d1d1f; font-weight: 500; }
+                        Text { text: encoder-index == 0 ? "화질 (CRF):" : "화질 (CQ):"; color: #1d1d1f; font-weight: 500; }
                         Text { text: "(Lower is better)"; color: #86868b; font-size: 10px; }
                     }
-                    Slider {
+                    if (encoder-index == 0) : Slider {
                         minimum: 0;
                         maximum: 51;
                         value <=> crf-value;
                     }
-                    Text { text: round(crf-value); color: #1d1d1f; vertical-alignment: center; width: 30px; }
+                    if (encoder-index == 0) : Text { text: round(crf-value); color: #1d1d1f; vertical-alignment: center; width: 30px; }
+                    if (encoder-index == 1) : Slider {
+                        minimum: 0;
+                        maximum: 51;
+                        value <=> cq-value;
+                    }
+                    if (encoder-index == 1) : Text { text: round(cq-value); color: #1d1d1f; vertical-alignment: center; width: 30px; }
                 }
 
                 HorizontalLayout {

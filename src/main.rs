@@ -808,6 +808,32 @@ async fn watch_progress(mut child: tokio::process::Child, total_dur: f32, on_pro
     }
 }
 
+/// UI 설정에서 현재 선택된 인코더(0 = x265, 1 = NVENC)와 화질 값(CRF/CQ)을 읽는다.
+fn selected_encoder_and_quality(ui: &MainWindow) -> (i32, i32) {
+    let encoder = ui.get_encoder_index();
+    let quality = if encoder == 1 {
+        ui.get_cq_value() as i32
+    } else {
+        ui.get_crf_value() as i32
+    };
+    (encoder, quality)
+}
+
+/// 선택된 인코더에 맞는 FFmpeg 비디오 인코딩 인자를 추가한다.
+fn add_encoder_args(cmd: &mut Command, encoder: i32, quality: i32) {
+    if encoder == 1 {
+        // NVENC(GPU): VBR + CQ 기반 상수 품질 모드
+        cmd.arg("-c:v").arg("hevc_nvenc")
+            .arg("-rc").arg("vbr")
+            .arg("-cq").arg(quality.to_string())
+            .arg("-b:v").arg("0");
+    } else {
+        cmd.arg("-c:v").arg("libx265")
+            .arg("-crf").arg(quality.to_string())
+            .arg("-preset").arg("medium");
+    }
+}
+
 async fn do_cut(
     weak: slint::Weak<MainWindow>,
     ffmpeg: String,
@@ -894,7 +920,8 @@ async fn do_crop(
     start: f32,
     dur: f32,
     filter: String,
-    crf: i32,
+    encoder: i32,
+    quality: i32,
     label: String,
     taskbar: TaskbarProgress,
 ) {
@@ -909,10 +936,8 @@ async fn do_crop(
         .arg("-ss").arg(format!("{:.3}", start))
         .arg("-i").arg(&src)
         .arg("-t").arg(format!("{:.3}", dur))
-        .arg("-vf").arg(&filter)
-        .arg("-c:v").arg("libx265")
-        .arg("-crf").arg(crf.to_string())
-        .arg("-preset").arg("medium");
+        .arg("-vf").arg(&filter);
+    add_encoder_args(&mut cmd, encoder, quality);
     if is_webm_file(&src) {
         // WebM의 Opus/Vorbis 오디오는 MP4 컨테이너에 그대로 넣을 수 없어 AAC로 변환한다.
         cmd.arg("-c:a").arg("aac");
@@ -1056,7 +1081,9 @@ async fn main() -> Result<()> {
         main_window.on_reset_options(move || {
             if let Some(ui) = weak.upgrade() {
                 ui.set_output_suffix("_h265".into());
+                ui.set_encoder_index(0);
                 ui.set_crf_value(19.0);
+                ui.set_cq_value(17.0);
                 ui.set_output_folder("".into());
 
             }
@@ -1138,7 +1165,7 @@ async fn main() -> Result<()> {
             let ui = weak.upgrade().unwrap();
             let ffmpeg = ui.get_ffmpeg_path().to_string();
             let suffix = ui.get_output_suffix().to_string();
-            let crf = ui.get_crf_value() as i32;
+            let (encoder, quality) = selected_encoder_and_quality(&ui);
             let out_folder = ui.get_output_folder().to_string();
             
             let mut file_paths = Vec::new();
@@ -1212,10 +1239,8 @@ async fn main() -> Result<()> {
                     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
 
                     cmd.arg("-y")
-                        .arg("-i").arg(input_path)
-                        .arg("-c:v").arg("libx265")
-                        .arg("-crf").arg(crf.to_string())
-                        .arg("-preset").arg("medium");
+                        .arg("-i").arg(input_path);
+                    add_encoder_args(&mut cmd, encoder, quality);
                     if is_webm_file(input_path) {
                         // WebM의 Opus/Vorbis 오디오는 MP4 컨테이너에 그대로 넣을 수 없어 AAC로 변환한다.
                         cmd.arg("-c:a").arg("aac");
@@ -1848,7 +1873,7 @@ async fn main() -> Result<()> {
                 px = px.clamp(0, vw as i32 - pw);
                 py = py.clamp(0, vh as i32 - ph);
                 let filter = format!("crop={}:{}:{}:{}", pw, ph, px, py);
-                let crf = ui.get_crf_value() as i32;
+                let (encoder, quality) = selected_encoder_and_quality(&ui);
                 let out = src.with_file_name(format!("{}_crop.mp4", stem));
                 ui.set_edit_status_text(format!("크롭+컷 시작 ({}): {}", filter, src.display()).into());
                 tokio::spawn(do_crop(
@@ -1859,7 +1884,8 @@ async fn main() -> Result<()> {
                     start,
                     dur,
                     filter,
-                    crf,
+                    encoder,
+                    quality,
                     "크롭+컷".to_string(),
                     taskbar.clone(),
                 ));
