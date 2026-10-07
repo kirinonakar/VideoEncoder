@@ -212,9 +212,9 @@ export component MainWindow inherits Window {
     in-out property <string> ffmpeg-path: "";
     in-out property <string> output-suffix: "_h265";
     // 0 = x265 (CPU), 1 = NVENC (hevc_nvenc)
-    in-out property <int> encoder-index: 0;
+    in-out property <int> encoder-index: 1;
     in-out property <float> crf-value: 19.0;
-    in-out property <float> cq-value: 17.0;
+    in-out property <float> cq-value: 20.0;
     in-out property <string> output-folder: "";
     in-out property <[string]> file-list: [];
     in-out property <float> overall-progress: 0.0;

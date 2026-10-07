@@ -1082,9 +1082,9 @@ async fn main() -> Result<()> {
         main_window.on_reset_options(move || {
             if let Some(ui) = weak.upgrade() {
                 ui.set_output_suffix("_h265".into());
-                ui.set_encoder_index(0);
+                ui.set_encoder_index(1);
                 ui.set_crf_value(19.0);
-                ui.set_cq_value(17.0);
+                ui.set_cq_value(20.0);
                 ui.set_output_folder("".into());
 
             }
