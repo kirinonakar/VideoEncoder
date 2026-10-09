@@ -1,0 +1,18 @@
+export global AppTheme {
+    in-out property <bool> dark-mode: false;
+    out property <color> background: dark-mode ? #16181d : #f5f5f7;
+    out property <color> surface: dark-mode ? #22252c : #ffffff;
+    out property <color> subtle-surface: dark-mode ? #1c1f25 : #fbfbfd;
+    out property <color> hover: dark-mode ? #2d323c : #f5f5f7;
+    out property <color> pressed: dark-mode ? #383f4b : #e8e8ed;
+    out property <color> selected: dark-mode ? #253b55 : #e8f0fe;
+    out property <color> border: dark-mode ? #414751 : #d2d2d7;
+    out property <color> separator: dark-mode ? #343a44 : #e5e5e7;
+    out property <color> text: dark-mode ? #f1f3f7 : #1d1d1f;
+    out property <color> muted: dark-mode ? #a4adbb : #6e6e73;
+    out property <color> accent: dark-mode ? #70b7ff : #0071e3;
+    out property <color> track: dark-mode ? #48515f : #c5cad3;
+    out property <color> selection: dark-mode ? #87ceeb66 : #87ceeb88;
+    out property <color> start: dark-mode ? #4ade80 : #168447;
+    out property <color> end: dark-mode ? #ff6b6b : #d9363e;
+}

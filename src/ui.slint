@@ -1,4 +1,6 @@
-import { Button, ComboBox, LineEdit, Slider, HorizontalBox, VerticalBox, ProgressIndicator, ScrollView, CheckBox, TabWidget } from "std-widgets.slint";
+import { Button, ComboBox, LineEdit, Slider, HorizontalBox, VerticalBox, ProgressIndicator, ScrollView, CheckBox, TabWidget, Palette } from "std-widgets.slint";
+import { AppTheme } from "theme.slint";
+import { EditorTimeline } from "editor-timeline.slint";
 
 // Custom ComboBox: 긴 파일명은 "…"으로 생략(elide)하고 드롭다운 화살표는 항상 표시한다.
 component VideoFileComboBox {
@@ -37,9 +39,9 @@ component VideoFileComboBox {
             width: 100%;
             height: 100%;
             border-radius: 3px;
-            background: i-touch.pressed ? #e8e8ed : (i-touch.has-hover ? #f5f5f7 : #ffffff);
+            background: i-touch.pressed ? AppTheme.pressed : (i-touch.has-hover ? AppTheme.hover : AppTheme.surface);
             border-width: 1px;
-            border-color: #8a8a8e;
+            border-color: AppTheme.border;
 
             VerticalLayout {
                 alignment: center;
@@ -56,7 +58,7 @@ component VideoFileComboBox {
                         min-width: 0px;
                         horizontal-stretch: 1;
                         vertical-alignment: center;
-                        color: #1d1d1f;
+                        color: AppTheme.text;
                         font-size: 14px;
                         font-family: "Noto Sans CJK JP";
                     }
@@ -65,7 +67,7 @@ component VideoFileComboBox {
                         width: 10px;
                         height: 10px;
                         y: (parent.height - self.height) / 2;
-                        fill: #6e6e73;
+                        fill: AppTheme.muted;
                         commands: "M 1 3 L 9 3 L 5 8 Z";
                     }
                 }
@@ -124,10 +126,10 @@ component VideoFileComboBox {
             Rectangle {
                 width: 100%;
                 height: 100%;
-                background: #ffffff;
+                background: AppTheme.surface;
                 border-radius: 7px;
                 border-width: 1px;
-                border-color: #d2d2d7;
+                border-color: AppTheme.border;
 
                 ScrollView {
                     width: 100%;
@@ -148,7 +150,7 @@ component VideoFileComboBox {
                                 width: 100%;
                                 height: 100%;
                                 border-radius: 3px;
-                                background: item-touch.pressed ? #e8e8ed : (item-touch.has-hover ? #f5f5f7 : (index == root.current-index ? #e8f0fe : transparent));
+                                background: item-touch.pressed ? AppTheme.pressed : (item-touch.has-hover ? AppTheme.hover : (index == root.current-index ? AppTheme.selected : transparent));
 
                                 HorizontalLayout {
                                     padding-left: 8px;
@@ -160,7 +162,7 @@ component VideoFileComboBox {
                                         min-width: 0px;
                                         horizontal-stretch: 1;
                                         vertical-alignment: center;
-                                        color: #1d1d1f;
+                                        color: AppTheme.text;
                                         font-size: 14px;
                                         font-family: "Noto Sans CJK JP";
                                     }
@@ -180,7 +182,10 @@ export component MainWindow inherits Window {
     default-font-family: "Segoe UI";
     min-width: 760px;
     min-height: 720px;
-    background: #f5f5f7; // Soft Light Gray background
+    background: AppTheme.background;
+    in-out property <bool> dark-mode <=> AppTheme.dark-mode;
+    init => { Palette.color-scheme = root.dark-mode ? ColorScheme.dark : ColorScheme.light; }
+    changed dark-mode => { Palette.color-scheme = root.dark-mode ? ColorScheme.dark : ColorScheme.light; }
 
     // Callbacks to Rust
     callback select-ffmpeg-path();
@@ -204,6 +209,8 @@ export component MainWindow inherits Window {
     callback trim-changed();
     callback crop-changed();
     callback toggle-play();
+    callback playback-limit-changed();
+    callback rewind();
     callback run-cut();
     callback run-crop();
     callback reset-edit();
@@ -241,6 +248,7 @@ export component MainWindow inherits Window {
     in-out property <float> crop-w: 1.0;
     in-out property <float> crop-h: 1.0;
     in-out property <bool> is-playing: false;
+    in-out property <bool> playback-limited: false;
     in-out property <bool> edit-busy: false;
     in-out property <float> edit-progress: 0.0;
     in-out property <string> edit-status-text: "";
@@ -255,14 +263,32 @@ export component MainWindow inherits Window {
         padding: 16px;
         spacing: 12px;
 
-        // Header
-        Text {
+        // Keep the title centered and put the theme toggle at the far right.
+        Rectangle {
+            height: 36px;
             vertical-stretch: 0;
-            text: "VideoEncoder FFmpeg Wrapper";
-            font-size: 20px;
-            font-weight: 700;
-            color: #0071e3; // Apple blue accent
-            horizontal-alignment: center;
+            Text {
+                x: theme-toggle.width;
+                width: parent.width - 2 * theme-toggle.width;
+                height: 100%;
+                text: "VideoEncoder FFmpeg Wrapper";
+                font-size: 20px;
+                font-weight: 700;
+                color: AppTheme.accent;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            theme-toggle := Button {
+                x: parent.width - self.width;
+                width: 44px;
+                height: 36px;
+                accessible-label: root.dark-mode ? "라이트 모드로 전환" : "다크 모드로 전환";
+                icon: root.dark-mode ? @image-url("icons/sun.svg") : @image-url("icons/moon.svg");
+                icon-size: 18px;
+                colorize-icon: true;
+                checkable: true;
+                checked <=> root.dark-mode;
+            }
         }
 
         TabWidget {
@@ -278,10 +304,10 @@ export component MainWindow inherits Window {
         // Configuration Section
         Rectangle {
             vertical-stretch: 0;
-            background: #ffffff; // White card
+            background: AppTheme.surface; // Themed card
             border-radius: 12px;
             border-width: 1px;
-            border-color: #d2d2d7;
+            border-color: AppTheme.border;
             
             VerticalLayout {
                 padding: 10px;
@@ -289,7 +315,7 @@ export component MainWindow inherits Window {
 
                 HorizontalLayout {
                     spacing: 12px;
-                    Text { text: "FFmpeg 경로:"; color: #1d1d1f; vertical-alignment: center; width: 100px; font-weight: 500; }
+                    Text { text: "FFmpeg 경로:"; color: AppTheme.text; vertical-alignment: center; width: 100px; font-weight: 500; }
                     LineEdit {
                         text <=> ffmpeg-path;
                         placeholder-text: "ffmpeg.exe 경로를 지정하세요";
@@ -303,7 +329,7 @@ export component MainWindow inherits Window {
 
                 HorizontalLayout {
                     spacing: 12px;
-                    Text { text: "출력 Suffix:"; color: #1d1d1f; vertical-alignment: center; width: 100px; font-weight: 500;}
+                    Text { text: "출력 Suffix:"; color: AppTheme.text; vertical-alignment: center; width: 100px; font-weight: 500;}
                     LineEdit {
                         text <=> output-suffix;
                     }
@@ -311,7 +337,7 @@ export component MainWindow inherits Window {
 
                 HorizontalLayout {
                     spacing: 12px;
-                    Text { text: "인코더:"; color: #1d1d1f; vertical-alignment: center; width: 100px; font-weight: 500; }
+                    Text { text: "인코더:"; color: AppTheme.text; vertical-alignment: center; width: 100px; font-weight: 500; }
                     ComboBox {
                         model: ["x265 (CPU)", "NVENC (H.265)"];
                         current-index <=> encoder-index;
@@ -323,26 +349,26 @@ export component MainWindow inherits Window {
                     VerticalLayout {
                         width: 100px;
                         alignment: center;
-                        Text { text: encoder-index == 0 ? "화질 (CRF):" : "화질 (CQ):"; color: #1d1d1f; font-weight: 500; }
-                        Text { text: "(Lower is better)"; color: #86868b; font-size: 10px; }
+                        Text { text: encoder-index == 0 ? "화질 (CRF):" : "화질 (CQ):"; color: AppTheme.text; font-weight: 500; }
+                        Text { text: "(Lower is better)"; color: AppTheme.muted; font-size: 10px; }
                     }
                     if (encoder-index == 0) : Slider {
                         minimum: 0;
                         maximum: 51;
                         value <=> crf-value;
                     }
-                    if (encoder-index == 0) : Text { text: round(crf-value); color: #1d1d1f; vertical-alignment: center; width: 30px; }
+                    if (encoder-index == 0) : Text { text: round(crf-value); color: AppTheme.text; vertical-alignment: center; width: 30px; }
                     if (encoder-index == 1) : Slider {
                         minimum: 0;
                         maximum: 51;
                         value <=> cq-value;
                     }
-                    if (encoder-index == 1) : Text { text: round(cq-value); color: #1d1d1f; vertical-alignment: center; width: 30px; }
+                    if (encoder-index == 1) : Text { text: round(cq-value); color: AppTheme.text; vertical-alignment: center; width: 30px; }
                 }
 
                 HorizontalLayout {
                     spacing: 12px;
-                    Text { text: "출력 폴더:"; color: #1d1d1f; vertical-alignment: center; width: 100px; font-weight: 500; }
+                    Text { text: "출력 폴더:"; color: AppTheme.text; vertical-alignment: center; width: 100px; font-weight: 500; }
                     LineEdit {
                         text <=> output-folder;
                         placeholder-text: "기본값: 원본과 동일";
@@ -367,10 +393,10 @@ export component MainWindow inherits Window {
         // File List Section
         Rectangle {
             vertical-stretch: 1;
-            background: #ffffff;
+            background: AppTheme.surface;
             border-radius: 12px;
             border-width: 1px;
-            border-color: #d2d2d7;
+            border-color: AppTheme.border;
             
             VerticalLayout {
                 padding: 10px;
@@ -379,7 +405,7 @@ export component MainWindow inherits Window {
                 HorizontalLayout {
                     vertical-stretch: 0;
                     spacing: 8px;
-                    Text { text: "인코딩 대기 목록 (" + file-list.length + ")"; color: #1d1d1f; font-weight: 600; font-size: 16px; vertical-alignment: center; }
+                    Text { text: "인코딩 대기 목록 (" + file-list.length + ")"; color: AppTheme.text; font-weight: 600; font-size: 16px; vertical-alignment: center; }
                     Rectangle {} // Spacer
                     HorizontalLayout {
                         spacing: 8px;
@@ -393,14 +419,14 @@ export component MainWindow inherits Window {
                 Rectangle {
                     vertical-stretch: 1;
                     min-height: 120px;
-                    background: #fbfbfd;
+                    background: AppTheme.subtle-surface;
                     border-radius: 6px;
                     border-width: 1px;
-                    border-color: #e5e5e7;
+                    border-color: AppTheme.separator;
                     
                     if (file-list.length == 0) : Text {
                         text: "파일이나 폴더를 드래그해서 추가하세요";
-                        color: #86868b;
+                        color: AppTheme.muted;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -410,7 +436,7 @@ export component MainWindow inherits Window {
                             alignment: start;
                             for file in file-list : Text {
                                 text: file;
-                                color: #1d1d1f;
+                                color: AppTheme.text;
                                 font-size: 13px;
                                 font-family: "Noto Sans CJK JP";
                             }
@@ -432,9 +458,9 @@ export component MainWindow inherits Window {
                 spacing: 4px;
                 HorizontalBox {
                     padding: 0;
-                    Text { text: "전체 진행도"; color: #1d1d1f; font-weight: 600; font-size: 14px; font-family: "Segoe UI"; }
+                    Text { text: "전체 진행도"; color: AppTheme.text; font-weight: 600; font-size: 14px; font-family: "Segoe UI"; }
                     Rectangle {} // Spacer
-                    Text { text: overall-time-text; color: #86868b; font-size: 13px; vertical-alignment: bottom; font-family: "Segoe UI"; }
+                    Text { text: overall-time-text; color: AppTheme.muted; font-size: 13px; vertical-alignment: bottom; font-family: "Segoe UI"; }
                 }
                 ProgressIndicator {
                     progress: overall-progress;
@@ -442,17 +468,17 @@ export component MainWindow inherits Window {
                 }
             }
 
-            Rectangle { height: 1px; background: #e5e5e7; } // Separator
+            Rectangle { height: 1px; background: AppTheme.separator; } // Separator
 
             // Current File Section
             VerticalLayout {
                 spacing: 2px;
-                Text { text: "현재 파일 진행"; color: #1d1d1f; font-weight: 500; font-size: 13px; font-family: "Segoe UI"; }
+                Text { text: "현재 파일 진행"; color: AppTheme.text; font-weight: 500; font-size: 13px; font-family: "Segoe UI"; }
                 
                 // Filename (First line)
                 Text {
                     text: current_file_text;
-                    color: #1d1d1f;
+                    color: AppTheme.text;
                     font-size: 13px;
                     wrap: word-wrap;
                     height: 20px;
@@ -462,7 +488,7 @@ export component MainWindow inherits Window {
                 // Progress details (Second line)
                 Text {
                     text: current_progress_text;
-                    color: #1d1d1f;
+                    color: AppTheme.text;
                     font-size: 13px;
                     height: 20px;
                     font-family: "Segoe UI";
@@ -470,7 +496,7 @@ export component MainWindow inherits Window {
                 // Time info (Third line)
                 Text {
                     text: current_time_text;
-                    color: #86868b;
+                    color: AppTheme.muted;
                     font-size: 13px;
                     height: 20px;
                     font-family: "Segoe UI";
@@ -519,7 +545,7 @@ export component MainWindow inherits Window {
                     // Video source row
                     HorizontalLayout {
                         spacing: 8px;
-                        Text { text: "비디오:"; color: #1d1d1f; width: 60px; vertical-alignment: center; font-weight: 500; }
+                        Text { text: "비디오:"; color: AppTheme.text; width: 60px; vertical-alignment: center; font-weight: 500; }
                         VideoFileComboBox {
                             model: file-list;
                             current-index <=> selected-index;
@@ -531,7 +557,7 @@ export component MainWindow inherits Window {
 
                     Text {
                         text: video-info-text;
-                        color: #86868b;
+                        color: AppTheme.muted;
                         font-size: 12px;
                         wrap: word-wrap;
                     }
@@ -550,7 +576,7 @@ export component MainWindow inherits Window {
 
                         if (!video-loaded) : Text {
                             text: "비디오를 선택하면 여기에 미리보기가 표시됩니다";
-                            color: #86868b;
+                            color: #a4adbb;
                             font-size: 13px;
                             horizontal-alignment: center;
                             vertical-alignment: center;
@@ -751,142 +777,55 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // Timeline
-                    Rectangle {
-                        height: 34px;
-                        property <length> tl-w: self.width;
-                        property <bool> tl-dragging: false;
-                        property <bool> start-dragging: false;
-                        property <bool> end-dragging: false;
-
-                        // Track
-                        Rectangle {
-                            y: 14px;
-                            height: 6px;
-                            width: 100%;
-                            background: #3a3a3c;
-                            border-radius: 3px;
-                        }
-
-                        // Trim range highlight
-                        Rectangle {
-                            x: trim-start / max(video-duration, 0.01) * tl-w;
-                            y: 8px;
-                            width: max(0px, (trim-end - trim-start) / max(video-duration, 0.01) * tl-w);
-                            height: 18px;
-                            background: #30d15859;
-                            border-radius: 4px;
-                        }
-
-                        // Whole-bar seek (click/drag to move playhead)
-                        TouchArea {
-                            pointer-event(ev) => {
-                                if (ev.kind == PointerEventKind.down) {
-                                    tl-dragging = true;
-                                    seek-time(clamp(self.mouse-x / tl-w * video-duration, 0.0, video-duration));
-                                } else if (ev.kind == PointerEventKind.up) {
-                                    tl-dragging = false;
-                                } else if (ev.kind == PointerEventKind.move && tl-dragging) {
-                                    seek-time(clamp(self.mouse-x / tl-w * video-duration, 0.0, video-duration));
-                                }
-                            }
-                        }
-
-                        // Playhead (visual only)
-                        Rectangle {
-                            x: preview-time / max(video-duration, 0.01) * tl-w - 3px;
-                            y: 0px;
-                            width: 6px;
-                            height: 34px;
-                            background: #0071e3;
-                            border-radius: 3px;
-                        }
-
-                        // Start marker
-                        Rectangle {
-                            x: trim-start / max(video-duration, 0.01) * tl-w - 7px;
-                            y: 11px;
-                            width: 14px;
-                            height: 12px;
-                            background: #ff9f0a;
-                            border-radius: 4px;
-                            TouchArea {
-                                pointer-event(ev) => {
-                                    if (ev.kind == PointerEventKind.down) {
-                                        start-dragging = true;
-                                    } else if (ev.kind == PointerEventKind.up) {
-                                        start-dragging = false;
-                                    } else if (ev.kind == PointerEventKind.move && start-dragging) {
-                                        trim-start = clamp((self.mouse-x + parent.x) / tl-w * video-duration, 0.0, max(0.0, trim-end - 0.05));
-                                        trim-changed();
-                                        seek-time(trim-start);
-                                    }
-                                }
-                            }
-                        }
-
-                        // End marker
-                        Rectangle {
-                            x: trim-end / max(video-duration, 0.01) * tl-w - 7px;
-                            y: 11px;
-                            width: 14px;
-                            height: 12px;
-                            background: #30d158;
-                            border-radius: 4px;
-                            TouchArea {
-                                pointer-event(ev) => {
-                                    if (ev.kind == PointerEventKind.down) {
-                                        end-dragging = true;
-                                    } else if (ev.kind == PointerEventKind.up) {
-                                        end-dragging = false;
-                                    } else if (ev.kind == PointerEventKind.move && end-dragging) {
-                                        trim-end = clamp((self.mouse-x + parent.x) / tl-w * video-duration, trim-start + 0.05, video-duration);
-                                        trim-changed();
-                                        seek-time(trim-end);
-                                    }
-                                }
-                            }
-                        }
+                    EditorTimeline {
+                        enabled: video-loaded && !edit-busy;
+                        duration: video-duration;
+                        preview-time: root.preview-time;
+                        frame-step: 1 / max(video-fps, 1);
+                        start <=> trim-start;
+                        end <=> trim-end;
+                        start-text: time-start-text;
+                        end-text: time-end-text;
+                        preview-text: time-preview-text;
+                        range-changed => { trim-changed(); }
+                        seek(time) => { seek-time(time); }
                     }
 
-                    // Time labels
-                    HorizontalLayout {
-                        Text { text: "시작 " + time-start-text; color: #ff9f0a; font-size: 12px; width: 130px; }
-                        Rectangle {}
-                        Text { text: time-preview-text; color: #0071e3; font-size: 12px; }
-                        Rectangle {}
-                        Text { text: "끝 " + time-end-text; color: #30d158; font-size: 12px; width: 130px; }
-                    }
-
-                    // Trim sliders
-                    HorizontalLayout {
-                        spacing: 8px;
-                        Text { text: "시작:"; width: 42px; color: #1d1d1f; vertical-alignment: center; font-size: 12px; }
-                        Slider {
-                            value <=> trim-start;
-                            minimum: 0;
-                            maximum: max(video-duration, 0.01);
-                            changed => { trim-changed(); seek-time(trim-start); }
-                            vertical-stretch: 1;
-                        }
-                        Text { text: "끝:"; width: 32px; color: #1d1d1f; vertical-alignment: center; font-size: 12px; }
-                        Slider {
-                            value <=> trim-end;
-                            minimum: 0;
-                            maximum: max(video-duration, 0.01);
-                            changed => { trim-changed(); seek-time(trim-end); }
-                            vertical-stretch: 1;
-                        }
-                    }
-
-                    Text { text: crop-info-text; color: #86868b; font-size: 12px; }
+                    Text { text: crop-info-text; color: AppTheme.muted; font-size: 12px; }
 
                     // Marker & play buttons
                     HorizontalLayout {
                         spacing: 8px;
-                        Button { text: "시작점 ← 현재"; enabled: video-loaded && !edit-busy; clicked => { mark-trim-start(); } }
-                        Button { text: "끝점 ← 현재"; enabled: video-loaded && !edit-busy; clicked => { mark-trim-end(); } }
-                        Button { text: is-playing ? "⏸" : "▶"; enabled: video-loaded && !edit-busy; clicked => { toggle-play(); } }
+                        Button { text: "시작점 설정"; enabled: video-loaded && !edit-busy; clicked => { mark-trim-start(); } }
+                        Button { text: "끝점 설정"; enabled: video-loaded && !edit-busy; clicked => { mark-trim-end(); } }
+                        Button {
+                            text: "재생 제한";
+                            checkable: true;
+                            checked <=> playback-limited;
+                            enabled: video-loaded && !edit-busy;
+                            clicked => { playback-limit-changed(); }
+                        }
+                        Button {
+                            width: 44px;
+                            height: 34px;
+                            icon: @image-url("icons/rewind.svg");
+                            icon-size: 22px;
+                            colorize-icon: true;
+                            accessible-label: playback-limited ? "시작점으로 되감기" : "처음으로 되감기";
+                            enabled: video-loaded && !edit-busy;
+                            clicked => { rewind(); }
+                        }
+                        Button {
+                            width: 44px;
+                            height: 34px;
+                            primary: true;
+                            icon: is-playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg");
+                            icon-size: 22px;
+                            colorize-icon: true;
+                            accessible-label: is-playing ? "일시정지" : "재생";
+                            enabled: video-loaded && !edit-busy;
+                            clicked => { toggle-play(); }
+                        }
                         Button { text: "편집 초기화"; enabled: video-loaded && !edit-busy; clicked => { reset-edit(); } }
                     }
 
@@ -915,7 +854,7 @@ export component MainWindow inherits Window {
                     Text {
                         text: edit-status-text;
                         wrap: word-wrap;
-                        color: #1d1d1f;
+                        color: AppTheme.text;
                         font-size: 12px;
                     }
                 }

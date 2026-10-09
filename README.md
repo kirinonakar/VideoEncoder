@@ -6,7 +6,7 @@ A sleek, high-performance video encoding GUI built with **Rust** and **Slint**. 
 
 ## Key Features
 
--   **Modern Apple-style Light Theme**: A clean and premium interface designed for clarity and ease of use.
+-   **Light / Dark Theme**: Switch themes with the toggle at the right of the title; both encoding and editing controls follow the selected theme.
 -   **Native Windows Drag & Drop**: Seamlessly add files and folders by dragging them into the app window (implemented via low-level `WndProc` subclassing for maximum compatibility).
 -   **HEVC (H.265) Optimization**: Default configurations tailored for high-quality, low-size H.265 encoding.
 -   **Detailed Progress Tracking**: Real-time parsing of FFmpeg logs to show per-file percentage, encoding speed (x speed), and live bitrate.
@@ -56,9 +56,10 @@ You can download the latest version from the [Releases Page](https://github.com/
 
 The app includes a lightweight video editor for quick trimming and cropping right in the main window.
 
--   **Preview Player**: Load a video to scrub through frames (frame extraction via FFmpeg) and preview the crop area in real time.
--   **Trim / Cut**: Set the start/end points with the timeline sliders or the *Mark Start / Mark End* buttons (minimum 0.05s). Cutting runs FFmpeg with `-ss`/`-t` and stream copy (`-c copy`), so it is **lossless and instant** — no re-encoding. Output: `{name}_cut.{ext}`.
+-   **Preview Player**: Click or drag the upper playback timeline to seek through frames (frame extraction via FFmpeg) and preview the crop area in real time.
+-   **Trim / Cut**: Set the start/end points with one two-handle range slider, aligned with the playback timeline, or the **시작점 설정 / 끝점 설정** buttons (minimum 0.05s). Green and red markers bound the sky-blue selection. Each handle also supports arrow keys and Home/End. With playback limiting off, adjusting the range preserves the playback position and play/pause state. Cutting runs FFmpeg with `-ss`/`-t` and stream copy (`-c copy`), so it is **lossless and instant** — no re-encoding. Output: `{name}_cut.{ext}`.
 -   **Crop**: Drag or resize the crop overlay directly on the preview. The selected region is applied via the FFmpeg `crop` filter and **re-encoded to HEVC (H.265)** using the configured encoder and quality (x265 CRF / NVENC CQ); the audio track is copied untouched. Output: `{name}_crop.mp4`.
+-   **Playback Limit / Rewind**: Toggle **재생 제한** to constrain seeking and playback to the selected start/end range; video and audio stop at the end. The SVG rewind button moves to the beginning of the video, or the selection start while limited, preserving play/pause state.
 -   **Smart Fallback**: If the crop region covers the whole frame, the app automatically runs a lossless cut instead of re-encoding.
 -   **Live Feedback**: The crop coordinates (x, y, width, height) and output resolution are shown in real time, with a progress bar and status messages for both cut and crop jobs.
 

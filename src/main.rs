@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 slint::include_modules!();
+mod playback_range;
+use playback_range::PlaybackRange;
 
 use anyhow::Result;
 use slint::{Model, SharedString, VecModel, ModelRc};
@@ -642,6 +644,18 @@ impl FrameRequester {
                         return;
                     }
                     if let Some(ui) = w2.upgrade() {
+                        let range = playback_range(&ui);
+                        if range.finished(media_t) {
+                            ui.set_preview_time(range.end);
+                            ui.set_time_preview_text(seconds_to_hms(range.end).into());
+                            ui.set_is_playing(false);
+                            this2.stop_playback();
+                            return;
+                        }
+                        if media_t < range.start {
+                            move_preview(&ui, &this2, range.start, true);
+                            return;
+                        }
                         let img = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
                             &buf, pw, ph,
                         );
@@ -694,6 +708,57 @@ impl FrameRequester {
                 });
             }
         });
+    }
+}
+
+fn playback_range(ui: &MainWindow) -> PlaybackRange {
+    PlaybackRange::new(
+        ui.get_video_duration(), ui.get_trim_start(), ui.get_trim_end(), ui.get_playback_limited(),
+    )
+}
+
+/// Seek or rewind using the same limits. Rewind and live range corrections can
+/// resume playback; ordinary timeline scrubbing continues to pause it.
+fn move_preview(ui: &MainWindow, requester: &Arc<FrameRequester>, time: f32, keep_playing: bool) {
+    let range = playback_range(ui);
+    let time = range.clamp(time);
+    let resume = keep_playing && ui.get_is_playing() && !range.finished(time);
+    ui.set_preview_time(time);
+    ui.set_time_preview_text(seconds_to_hms(time).into());
+    if !ui.get_video_loaded() {
+        return;
+    }
+    let ffmpeg = ui.get_ffmpeg_path().to_string();
+    if ffmpeg.is_empty() {
+        requester.stop_playback();
+        ui.set_is_playing(false);
+        return;
+    }
+    let path = PathBuf::from(ui.get_current_video_path().to_string());
+    ui.set_is_playing(resume);
+    if resume {
+        // Read live selection bounds on each UI frame so changing the end or
+        // disabling the limit during playback takes effect immediately.
+        requester.start_playback(
+            ui.as_weak(), ffmpeg, path, time, ui.get_video_duration(),
+            ui.get_video_fps(), ui.get_video_width(), ui.get_video_height(),
+        );
+    } else {
+        // EOF has no frame; keep the selected position and decode just before it.
+        let frame_time = time.min((ui.get_video_duration() - 0.05).max(0.0));
+        requester.request(ui.as_weak(), ffmpeg, path, frame_time, ui.get_video_width(), ui.get_video_height());
+    }
+}
+
+fn enforce_playback_range(ui: &MainWindow, requester: &Arc<FrameRequester>) {
+    if !ui.get_playback_limited() || !ui.get_video_loaded() {
+        return;
+    }
+    let range = playback_range(ui);
+    let time = ui.get_preview_time();
+    let clamped = range.clamp(time);
+    if time != clamped || (ui.get_is_playing() && range.finished(clamped)) {
+        move_preview(ui, requester, clamped, true);
     }
 }
 
@@ -1613,28 +1678,13 @@ async fn main() -> Result<()> {
         });
     }
 
-    // Seek (preview frame)
+    // Seek (preview frame); the active playback limit also applies to scrubbing.
     {
         let weak = ui_weak.clone();
         let requester = frame_requester.clone();
         main_window.on_seek_time(move |t| {
             if let Some(ui) = weak.upgrade() {
-                let dur = ui.get_video_duration();
-                // 영상 끝(EOF)에서는 프레임 추출이 실패하므로 살짝 앞으로 당긴다.
-                let t = t.clamp(0.0, (dur - 0.05).max(0.0));
-                ui.set_preview_time(t);
-                ui.set_time_preview_text(seconds_to_hms(t).into());
-                if ui.get_video_loaded() {
-                    if ui.get_is_playing() {
-                        // 시크(스크럽) 중에는 재생을 일시정지한다.
-                        ui.set_is_playing(false);
-                    }
-                    let ffmpeg = ui.get_ffmpeg_path().to_string();
-                    if !ffmpeg.is_empty() {
-                        let path = PathBuf::from(ui.get_current_video_path().to_string());
-                        requester.request(weak.clone(), ffmpeg, path, t, ui.get_video_width(), ui.get_video_height());
-                    }
-                }
+                move_preview(&ui, &requester, t, false);
             }
         });
     }
@@ -1647,7 +1697,7 @@ async fn main() -> Result<()> {
                 let t = ui.get_preview_time();
                 let min_end = (ui.get_trim_end() - 0.05).max(0.0);
                 ui.set_trim_start(t.min(min_end).max(0.0));
-                ui.set_time_start_text(seconds_to_hms(ui.get_trim_start()).into());
+                ui.invoke_trim_changed();
             }
         });
     }
@@ -1658,18 +1708,41 @@ async fn main() -> Result<()> {
                 let t = ui.get_preview_time();
                 let max_start = ui.get_trim_start() + 0.05;
                 ui.set_trim_end(t.max(max_start).min(ui.get_video_duration()));
-                ui.set_time_end_text(seconds_to_hms(ui.get_trim_end()).into());
+                ui.invoke_trim_changed();
             }
         });
     }
 
-    // Trim values changed -> refresh labels
+    // Trim edits only affect playback when the range limit requires a correction.
     {
         let weak = ui_weak.clone();
+        let requester = frame_requester.clone();
         main_window.on_trim_changed(move || {
             if let Some(ui) = weak.upgrade() {
                 ui.set_time_start_text(seconds_to_hms(ui.get_trim_start()).into());
                 ui.set_time_end_text(seconds_to_hms(ui.get_trim_end()).into());
+                enforce_playback_range(&ui, &requester);
+            }
+        });
+    }
+
+    // Enabling the limit immediately constrains an out-of-range position.
+    {
+        let weak = ui_weak.clone();
+        let requester = frame_requester.clone();
+        main_window.on_playback_limit_changed(move || {
+            if let Some(ui) = weak.upgrade() {
+                enforce_playback_range(&ui, &requester);
+            }
+        });
+    }
+    {
+        let weak = ui_weak.clone();
+        let requester = frame_requester.clone();
+        main_window.on_rewind(move || {
+            if let Some(ui) = weak.upgrade() {
+                let start = playback_range(&ui).start;
+                move_preview(&ui, &requester, start, true);
             }
         });
     }
@@ -1704,22 +1777,13 @@ async fn main() -> Result<()> {
                 if !ui.get_video_loaded() {
                     return;
                 }
-                let dur = ui.get_video_duration();
-                let mut t = ui.get_preview_time();
-                if t >= dur - 0.05 {
-                    // 영상 끝에 있으면 선택 구간의 시작부터 다시 재생한다.
-                    t = ui.get_trim_start();
-                }
-                ui.set_preview_time(t);
-                ui.set_time_preview_text(seconds_to_hms(t).into());
-                let ffmpeg = ui.get_ffmpeg_path().to_string();
-                if ffmpeg.is_empty() {
+                let range = playback_range(&ui);
+                if range.end <= range.start {
                     return;
                 }
-                let path = PathBuf::from(ui.get_current_video_path().to_string());
-                let fps = ui.get_video_fps();
+                let t = range.play_from(ui.get_preview_time());
                 ui.set_is_playing(true);
-                requester.start_playback(weak.clone(), ffmpeg, path, t, dur, fps, ui.get_video_width(), ui.get_video_height());
+                move_preview(&ui, &requester, t, true);
             }
         });
     }

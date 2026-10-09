@@ -1,0 +1,223 @@
+import { AppTheme } from "theme.slint";
+
+// Focus and keyboard behavior belong to each endpoint; pointer dragging uses
+// the whole range row so even very close endpoints can be selected separately.
+component TimelineHandle inherits FocusScope {
+    in property <float> minimum;
+    in property <float> maximum;
+    in property <float> step: 0.05;
+    in property <color> tint;
+    in property <string> label;
+    in-out property <float> value;
+    callback edited(float);
+    width: 24px;
+    height: 32px;
+    accessible-role: slider;
+    accessible-label: label;
+    accessible-enabled: root.enabled;
+    accessible-value: value;
+    accessible-value-minimum: minimum;
+    accessible-value-maximum: maximum;
+    accessible-value-step: step;
+    accessible-action-set-value(v) => {
+        if (v.is-float()) { root.set-value(v.to-float()); }
+    }
+    accessible-action-increment => { root.set-value(value + step); }
+    accessible-action-decrement => { root.set-value(value - step); }
+
+    public function set-value(next: float) {
+        if (root.enabled) {
+            root.value = clamp(next, root.minimum, root.maximum);
+            root.edited(root.value);
+        }
+    }
+
+    key-pressed(event) => {
+        if (!root.enabled) { return reject; }
+        if (event.text == Key.RightArrow || event.text == Key.UpArrow) {
+            root.set-value(value + step);
+        } else if (event.text == Key.LeftArrow || event.text == Key.DownArrow) {
+            root.set-value(value - step);
+        } else if (event.text == Key.Home) {
+            root.set-value(minimum);
+        } else if (event.text == Key.End) {
+            root.set-value(maximum);
+        } else {
+            return reject;
+        }
+        return accept;
+    }
+
+    Rectangle {
+        x: 5px;
+        y: 1px;
+        width: 14px;
+        height: 30px;
+        border-radius: 5px;
+        border-width: root.has-focus ? 2px : 0px;
+        border-color: AppTheme.accent;
+        background: AppTheme.surface;
+        Rectangle {
+            x: 5px;
+            y: 5px;
+            width: 4px;
+            height: 20px;
+            border-radius: 2px;
+            background: root.tint;
+        }
+    }
+}
+
+export component EditorTimeline inherits Rectangle {
+    in property <bool> enabled;
+    in property <float> duration;
+    in property <float> preview-time;
+    in property <float> frame-step: 0.05;
+    in property <string> start-text;
+    in property <string> end-text;
+    in property <string> preview-text;
+    in-out property <float> start;
+    in-out property <float> end;
+    callback range-changed();
+    callback seek(float);
+    height: 96px;
+    vertical-stretch: 0;
+    opacity: enabled ? 1 : 0.45;
+
+    // Both rows share exactly the same inset, usable width and time mapping.
+    property <length> track-left: 12px;
+    property <length> track-width: max(1px, root.width - 2 * track-left);
+    property <float> safe-duration: max(duration, 0.01);
+    property <float> minimum-gap: min(0.05, max(0, duration));
+    property <length> start-x: track-left + clamp(start / safe-duration, 0, 1) * track-width;
+    property <length> end-x: track-left + clamp(end / safe-duration, 0, 1) * track-width;
+    property <bool> dragging-end;
+    property <float> drag-value;
+
+    function begin-range-drag(position: length) {
+        root.dragging-end = position >= (root.start-x + root.end-x) / 2;
+        if (root.dragging-end) {
+            end-handle.focus();
+            if (abs(position - root.end-x) > 12px) {
+                end-handle.set-value((position - root.track-left) / root.track-width * root.duration);
+            }
+            root.drag-value = root.end;
+        } else {
+            start-handle.focus();
+            if (abs(position - root.start-x) > 12px) {
+                start-handle.set-value((position - root.track-left) / root.track-width * root.duration);
+            }
+            root.drag-value = root.start;
+        }
+    }
+
+    function drag-range(delta: length) {
+        if (root.dragging-end) {
+            end-handle.set-value(root.drag-value + delta / root.track-width * root.duration);
+        } else {
+            start-handle.set-value(root.drag-value + delta / root.track-width * root.duration);
+        }
+    }
+
+    // Playback track: the thin endpoint markers have the same 18px height
+    // and vertical position as the sky-blue selection shading.
+    Rectangle {
+        x: root.track-left; y: 14px;
+        width: root.track-width; height: 6px;
+        border-radius: 3px; background: AppTheme.track;
+    }
+    Rectangle {
+        x: root.start-x; y: 8px;
+        width: max(0px, root.end-x - root.start-x); height: 18px;
+        background: AppTheme.selection;
+    }
+    Rectangle {
+        x: root.track-left + clamp(root.preview-time / root.safe-duration, 0, 1) * root.track-width - 1px;
+        y: 2px; width: 2px; height: 30px;
+        border-radius: 1px; background: AppTheme.accent;
+    }
+    Rectangle {
+        x: root.start-x - 1.5px; y: 8px;
+        width: 3px; height: 18px;
+        background: AppTheme.start;
+    }
+    Rectangle {
+        x: root.end-x - 1.5px; y: 8px;
+        width: 3px; height: 18px;
+        background: AppTheme.end;
+    }
+    TouchArea {
+        x: 0px; y: 0px;
+        width: 100%; height: 34px;
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left &&
+                (event.kind == PointerEventKind.down || event.kind == PointerEventKind.up)) {
+                root.seek(clamp((self.mouse-x - root.track-left) / root.track-width * root.duration, 0, root.duration));
+            }
+        }
+        moved => {
+            if (self.pressed && self.enabled) {
+                root.seek(clamp((self.mouse-x - root.track-left) / root.track-width * root.duration, 0, root.duration));
+            }
+        }
+    }
+
+    HorizontalLayout {
+        y: 36px; height: 20px;
+        padding-left: root.track-left; padding-right: root.track-left;
+        Text { text: "시작 " + root.start-text; color: AppTheme.start; font-size: 12px; horizontal-stretch: 1; }
+        Text { text: root.preview-text; color: AppTheme.accent; font-size: 12px; horizontal-alignment: center; horizontal-stretch: 1; }
+        Text { text: "끝 " + root.end-text; color: AppTheme.end; font-size: 12px; horizontal-alignment: right; horizontal-stretch: 1; }
+    }
+
+    // One full-width range slider with two handles, aligned with playback.
+    Rectangle {
+        x: root.track-left; y: 72px;
+        width: root.track-width; height: 6px;
+        border-radius: 3px; background: AppTheme.track;
+    }
+    Rectangle {
+        x: root.start-x; y: 72px;
+        width: max(0px, root.end-x - root.start-x); height: 6px;
+        background: AppTheme.selection;
+    }
+    start-handle := TimelineHandle {
+        x: root.start-x - 12px; y: 59px;
+        enabled: root.enabled;
+        value <=> root.start;
+        minimum: 0;
+        maximum: max(0, root.end - root.minimum-gap);
+        step: root.frame-step;
+        tint: AppTheme.start;
+        label: "시작점 설정";
+        edited(value) => { root.range-changed(); }
+    }
+    end-handle := TimelineHandle {
+        x: root.end-x - 12px; y: 59px;
+        enabled: root.enabled;
+        value <=> root.end;
+        minimum: min(root.duration, root.start + root.minimum-gap);
+        maximum: root.duration;
+        step: root.frame-step;
+        tint: AppTheme.end;
+        label: "끝점 설정";
+        edited(value) => { root.range-changed(); }
+    }
+    TouchArea {
+        x: 0px; y: 59px; width: 100%; height: 32px;
+        enabled: root.enabled;
+        mouse-cursor: ew-resize;
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                root.begin-range-drag(self.mouse-x);
+            }
+        }
+        moved => {
+            if (self.pressed && self.enabled) {
+                root.drag-range(self.mouse-x - self.pressed-x);
+            }
+        }
+    }
+}
