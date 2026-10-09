@@ -136,6 +136,43 @@ mod taskbar_progress {
 use taskbar_progress::TaskbarProgress;
 
 #[cfg(target_os = "windows")]
+fn apply_titlebar_theme(ui: &MainWindow) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR,
+        DWMWA_USE_IMMERSIVE_DARK_MODE,
+    };
+
+    let window_handle = ui.window().window_handle();
+    let Ok(handle) = window_handle.window_handle() else { return; };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else { return; };
+    let hwnd = handle.hwnd.get() as HWND;
+    let colorref = |color: slint::Color| {
+        u32::from(color.red()) | (u32::from(color.green()) << 8) | (u32::from(color.blue()) << 16)
+    };
+    let dark = i32::from(ui.get_dark_mode());
+    let background = colorref(ui.get_titlebar_background());
+    let foreground = colorref(ui.get_titlebar_foreground());
+    // DWM applies these to the native caption. Derive both colors from the same
+    // palette as the content so switching back to light restores matching colors.
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
+            (&dark as *const i32).cast(), std::mem::size_of_val(&dark) as u32,
+        );
+        for (attribute, color) in [(DWMWA_CAPTION_COLOR, background), (DWMWA_TEXT_COLOR, foreground)] {
+            let _ = DwmSetWindowAttribute(
+                hwnd, attribute as u32, (&color as *const u32).cast(),
+                std::mem::size_of_val(&color) as u32,
+            );
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn apply_titlebar_theme(_ui: &MainWindow) {}
+
+#[cfg(target_os = "windows")]
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_DROPFILES => {
@@ -1095,6 +1132,14 @@ async fn main() -> Result<()> {
     let ui_weak = main_window.as_weak();
     let _ = APP_WINDOW_HANDLE.set(ui_weak.clone());
     let taskbar_progress = TaskbarProgress::new();
+    {
+        let weak = ui_weak.clone();
+        main_window.on_native_theme_changed(move || {
+            if let Some(ui) = weak.upgrade() {
+                apply_titlebar_theme(&ui);
+            }
+        });
+    }
 
     // 1. Initial FFmpeg setup
     let initial_ffmpeg = if Path::new("./ffmpeg.exe").exists() {
@@ -1971,6 +2016,7 @@ async fn main() -> Result<()> {
                 if let Ok(handle) = window_handle.window_handle() {
                     if let RawWindowHandle::Win32(h) = handle.as_raw() {
                         let hwnd = h.hwnd.get() as HWND;
+                        apply_titlebar_theme(&ui);
                         taskbar_clone.set_hwnd(h.hwnd.get());
                         println!("Slint HWND success (deferred): {:?}", hwnd);
 

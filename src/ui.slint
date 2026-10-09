@@ -184,8 +184,14 @@ export component MainWindow inherits Window {
     min-height: 720px;
     background: AppTheme.background;
     in-out property <bool> dark-mode <=> AppTheme.dark-mode;
+    out property <color> titlebar-background: AppTheme.background;
+    out property <color> titlebar-foreground: AppTheme.text;
+    callback native-theme-changed();
     init => { Palette.color-scheme = root.dark-mode ? ColorScheme.dark : ColorScheme.light; }
-    changed dark-mode => { Palette.color-scheme = root.dark-mode ? ColorScheme.dark : ColorScheme.light; }
+    changed dark-mode => {
+        Palette.color-scheme = root.dark-mode ? ColorScheme.dark : ColorScheme.light;
+        native-theme-changed();
+    }
 
     // Callbacks to Rust
     callback select-ffmpeg-path();
