@@ -1,0 +1,90 @@
+import { AppTheme } from "theme.slint";
+
+export global FileNameTooltip {
+    in-out property <string> text;
+    in-out property <length> anchor-x;
+    in-out property <length> anchor-y;
+    in-out property <length> anchor-height;
+    in-out property <bool> in-popup;
+}
+
+// The host's existing TouchArea supplies hover state, preserving its click behavior.
+export component FileNameText inherits Text {
+    in property <bool> hovered;
+    in property <bool> in-popup;
+    property <bool> shown;
+    property <length> shown-width;
+    property <bool> truncated: root.text != "" && root.preferred-width > root.width;
+    overflow: elide;
+    min-width: 0px;
+    horizontal-stretch: 1;
+    vertical-alignment: center;
+    color: AppTheme.text;
+    font-size: 14px;
+    font-family: "Noto Sans CJK JP";
+
+    function hide-tooltip() {
+        if (root.shown) {
+            FileNameTooltip.text = "";
+            root.shown = false;
+        }
+    }
+    changed hovered => { if (!root.hovered) { root.hide-tooltip(); } }
+    changed text => { root.hide-tooltip(); }
+
+    Timer {
+        // Read geometry after layout, never in a changed handler initialized
+        // while the parent repeater is still constructing its rows.
+        interval: root.shown ? 100ms : 600ms;
+        running: root.hovered && (root.truncated || root.shown);
+        triggered => {
+            if (root.shown) {
+                if (!root.truncated || root.absolute-position.x != FileNameTooltip.anchor-x
+                    || root.absolute-position.y != FileNameTooltip.anchor-y
+                    || root.width != root.shown-width) {
+                    root.hide-tooltip();
+                }
+            } else {
+                FileNameTooltip.anchor-x = root.absolute-position.x;
+                FileNameTooltip.anchor-y = root.absolute-position.y;
+                FileNameTooltip.anchor-height = root.height;
+                FileNameTooltip.in-popup = root.in-popup;
+                FileNameTooltip.text = root.text;
+                root.shown-width = root.width;
+                root.shown = true;
+            }
+        }
+    }
+}
+
+// Draw above the scroll view without taking focus or intercepting pointer events.
+export component FileNameTooltipLayer inherits Rectangle {
+    in property <bool> in-popup;
+    visible: FileNameTooltip.text != "" && FileNameTooltip.in-popup == root.in-popup;
+    width: 100%;
+    height: 100%;
+    property <length> anchor-top: FileNameTooltip.anchor-y - root.absolute-position.y;
+    property <length> below: root.anchor-top + FileNameTooltip.anchor-height + 4px;
+
+    Rectangle {
+        width: min(640px, max(0px, root.width - 16px));
+        height: tooltip-text.preferred-height + 16px;
+        x: max(8px, min(FileNameTooltip.anchor-x - root.absolute-position.x, root.width - self.width - 8px));
+        y: max(4px, min(root.below + self.height <= root.height - 4px ? root.below : root.anchor-top - self.height - 4px, root.height - self.height - 4px));
+        background: AppTheme.surface;
+        border-color: AppTheme.border;
+        border-width: 1px;
+        border-radius: 4px;
+
+        tooltip-text := Text {
+            x: 8px;
+            y: 8px;
+            width: parent.width - 16px;
+            text: FileNameTooltip.text;
+            color: AppTheme.text;
+            font-family: "Noto Sans CJK JP";
+            font-size: 13px;
+            wrap: char-wrap;
+        }
+    }
+}

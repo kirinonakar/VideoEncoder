@@ -1,6 +1,7 @@
 import { Button, ComboBox, LineEdit, Slider, HorizontalBox, VerticalBox, ProgressIndicator, ScrollView, CheckBox, TabWidget, Palette } from "std-widgets.slint";
 import { AppTheme } from "theme.slint";
 import { EditorTimeline } from "editor-timeline.slint";
+import { FileNameText, FileNameTooltip, FileNameTooltipLayer } from "file-name.slint";
 
 // Custom ComboBox: 긴 파일명은 "…"으로 생략(elide)하고 드롭다운 화살표는 항상 표시한다.
 component VideoFileComboBox {
@@ -30,6 +31,7 @@ component VideoFileComboBox {
                 root.current-index = min(root.current-index + 1, max(0, root.model.length - 1));
                 return accept;
             } else if (event.text == Key.Return) {
+                FileNameTooltip.text = "";
                 popup.show();
             }
             return reject;
@@ -52,15 +54,9 @@ component VideoFileComboBox {
                     padding-right: 8px;
                     spacing: 8px;
 
-                    Text {
+                    FileNameText {
                         text: root.model[root.current-index];
-                        overflow: elide;
-                        min-width: 0px;
-                        horizontal-stretch: 1;
-                        vertical-alignment: center;
-                        color: AppTheme.text;
-                        font-size: 14px;
-                        font-family: "Noto Sans CJK JP";
+                        hovered: i-touch.has-hover && !i-touch.pressed;
                     }
 
                     Path {
@@ -80,6 +76,7 @@ component VideoFileComboBox {
             clicked => {
                 root.focus();
                 if (root.model.length > 0) {
+                    FileNameTooltip.text = "";
                     popup.show();
                 }
             }
@@ -92,6 +89,7 @@ component VideoFileComboBox {
         }
         root.current-index = index;
         root.selected(index);
+        FileNameTooltip.text = "";
         popup.close();
     }
 
@@ -117,6 +115,7 @@ component VideoFileComboBox {
                     root.select(root.current-index);
                     return accept;
                 } else if (event.text == Key.Escape) {
+                    FileNameTooltip.text = "";
                     popup.close();
                     return accept;
                 }
@@ -156,15 +155,10 @@ component VideoFileComboBox {
                                     padding-left: 8px;
                                     padding-right: 8px;
 
-                                    Text {
+                                    FileNameText {
                                         text: value;
-                                        overflow: elide;
-                                        min-width: 0px;
-                                        horizontal-stretch: 1;
-                                        vertical-alignment: center;
-                                        color: AppTheme.text;
-                                        font-size: 14px;
-                                        font-family: "Noto Sans CJK JP";
+                                        hovered: item-touch.has-hover && !item-touch.pressed;
+                                        in-popup: true;
                                     }
                                 }
                             }
@@ -173,8 +167,11 @@ component VideoFileComboBox {
                 }
             }
         }
+        FileNameTooltipLayer { in-popup: true; }
     }
 }
+
+export struct JobItem { path: string, status: string, detail: string }
 
 export component MainWindow inherits Window {
     title: "VideoEncoder FFmpeg Wrapper";
@@ -195,6 +192,7 @@ export component MainWindow inherits Window {
 
     // Callbacks to Rust
     callback select-ffmpeg-path();
+    callback refresh-ffmpeg-path();
     callback select-output-folder();
     callback reset-options();
     callback start-encoding();
@@ -202,6 +200,18 @@ export component MainWindow inherits Window {
     callback pick-files();
     callback pick-folder();
     callback clear-list();
+    callback remove-job(int);
+    callback move-job(int, int);
+    callback retry-failed();
+    callback save-settings();
+    callback export-preset();
+    callback import-preset();
+    callback cancel-edit();
+    in-out property <[JobItem]> job-list;
+    in-out property <string> error-details;
+    in-out property <bool> all-audio: true;
+    in-out property <bool> preserve-subtitles: false;
+    in-out property <int> cut-mode: 0;
     
     // Custom callback for D&D trigger from Rust
     callback files-dropped(string);
@@ -217,8 +227,7 @@ export component MainWindow inherits Window {
     callback toggle-play();
     callback playback-limit-changed();
     callback rewind();
-    callback run-cut();
-    callback run-crop();
+    callback run-edit();
     callback reset-edit();
 
     // Properties from/to Rust
@@ -327,6 +336,11 @@ export component MainWindow inherits Window {
                         placeholder-text: "ffmpeg.exe 경로를 지정하세요";
                     }
                     Button {
+                        text: "자동선택";
+                        enabled: !is-encoding && !edit-busy;
+                        clicked => { refresh-ffmpeg-path(); }
+                    }
+                    Button {
                         text: "찾아보기";
                         primary: false;
                         clicked => { select-ffmpeg-path(); }
@@ -387,11 +401,22 @@ export component MainWindow inherits Window {
                 }
 
                 HorizontalLayout {
+                    spacing: 12px;
+                    CheckBox { text: "모든 오디오 트랙"; checked <=> all-audio; enabled: !is-encoding && !edit-busy; }
+                    CheckBox { text: "자막 보존"; checked <=> preserve-subtitles; enabled: !is-encoding && !edit-busy; }
+                    Text { text: "MP4: 비호환 오디오는 AAC / 텍스트 자막은 mov_text"; color: AppTheme.muted; font-size: 11px; vertical-alignment: center; }
+                }
+
+                HorizontalLayout {
                     alignment: start;
                     Button {
+                        enabled: !is-encoding && !edit-busy;
                         text: "옵션 초기화";
                         clicked => { reset-options(); }
                     }
+                    Button { text: "설정 저장"; clicked => { save-settings(); } }
+                    Button { text: "프리셋 저장"; clicked => { export-preset(); } }
+                    Button { text: "프리셋 열기"; enabled: !is-encoding && !edit-busy; clicked => { import-preset(); } }
                 }
             }
         }
@@ -415,9 +440,9 @@ export component MainWindow inherits Window {
                     Rectangle {} // Spacer
                     HorizontalLayout {
                         spacing: 8px;
-                        Button { text: "파일 추가"; clicked => { pick-files(); } }
-                        Button { text: "폴더 추가"; clicked => { pick-folder(); } }
-                        Button { text: "목록 비우기"; clicked => { clear-list(); } }
+                        Button { enabled: !is-encoding; text: "파일 추가"; clicked => { pick-files(); } }
+                        Button { enabled: !is-encoding; text: "폴더 추가"; clicked => { pick-folder(); } }
+                        Button { enabled: !is-encoding; text: "목록 비우기"; clicked => { clear-list(); } }
                     }
                 }
                 
@@ -440,11 +465,24 @@ export component MainWindow inherits Window {
                     ScrollView {
                         VerticalBox {
                             alignment: start;
-                            for file in file-list : Text {
-                                text: file;
-                                color: AppTheme.text;
-                                font-size: 13px;
-                                font-family: "Noto Sans CJK JP";
+                            for job[index] in job-list : HorizontalLayout {
+                                spacing: 6px;
+                                Text { text: job.status; color: job.status == "실패" ? #d33f49 : AppTheme.accent; width: 36px; vertical-alignment: center; font-family: "Noto Sans CJK JP"; }
+                                file-name-area := TouchArea {
+                                    min-width: 0px;
+                                    horizontal-stretch: 1;
+                                    min-height: file-name.preferred-height;
+                                    file-name := FileNameText {
+                                        width: 100%;
+                                        height: 100%;
+                                        text: job.path;
+                                        font-size: 13px;
+                                        hovered: file-name-area.has-hover && !file-name-area.pressed;
+                                    }
+                                }
+                                Button { text: "↑"; width: 32px; enabled: !is-encoding && index > 0; clicked => { move-job(index, -1); } }
+                                Button { text: "↓"; width: 32px; enabled: !is-encoding && index + 1 < job-list.length; clicked => { move-job(index, 1); } }
+                                Button { text: "제거"; enabled: !is-encoding; clicked => { remove-job(index); } }
                             }
                         }
                     }
@@ -524,7 +562,7 @@ export component MainWindow inherits Window {
             Button {
                 text: "변환 시작";
                 primary: true;
-                enabled: !is-encoding && file-list.length > 0;
+                enabled: !is-encoding && !edit-busy && file-list.length > 0;
                 clicked => { start-encoding(); }
                 height: 36px;
                 width: 180px;
@@ -535,8 +573,9 @@ export component MainWindow inherits Window {
                 enabled: is-encoding;
                 clicked => { stop-encoding(); }
                 height: 36px;
-                width: 180px;
+                width: 120px;
             }
+            Button { text: "실패만 재시도"; enabled: !is-encoding && !edit-busy; clicked => { retry-failed(); } }
         }
                 }
             }
@@ -558,7 +597,7 @@ export component MainWindow inherits Window {
                             selected => { open-video(); }
                         }
                         Button { text: "열기"; clicked => { open-video(); } }
-                        Button { text: "파일 선택..."; clicked => { pick-video(); } }
+                        Button { enabled: !is-encoding && !edit-busy; text: "파일 선택..."; clicked => { pick-video(); } }
                     }
 
                     Text {
@@ -835,21 +874,25 @@ export component MainWindow inherits Window {
                         Button { text: "편집 초기화"; enabled: video-loaded && !edit-busy; clicked => { reset-edit(); } }
                     }
 
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text { text: "컷 모드:"; color: AppTheme.text; vertical-alignment: center; }
+                        ComboBox { model: ["빠른 컷 (스트림 복사)", "정확한 컷 (재인코딩)"]; current-index <=> cut-mode; enabled: !edit-busy && !is-encoding; }
+                        Text { text: "모든 오디오/자막 옵션은 인코딩 탭에서 설정"; color: AppTheme.muted; font-size: 11px; vertical-alignment: center; }
+                    }
+                    Text { text: cut-mode == 0 ? "빠른 컷: 영상 화질 손실 없음 · 시작점에 키프레임 오차 가능" : "정확한 컷: 선택 시작점을 프레임 경계로 맞춰 HEVC/AAC 재인코딩 · MP4 출력"; color: AppTheme.muted; font-size: 12px; wrap: word-wrap; }
+                    Text { text: "편집 실행: 크롭 영역과 선택 구간을 자동 적용합니다. 크롭 시 재인코딩됩니다."; color: AppTheme.muted; font-size: 12px; wrap: word-wrap; }
+
                     // Action buttons
                     HorizontalLayout {
                         spacing: 8px;
                         Button {
-                            text: "잘라내기 실행 (무손실)";
+                            text: "편집 실행";
                             primary: true;
-                            enabled: video-loaded && !edit-busy && (trim-end - trim-start) > 0.05;
-                            clicked => { run-cut(); }
+                            enabled: video-loaded && !edit-busy && !is-encoding && (trim-end - trim-start) > 0.05;
+                            clicked => { run-edit(); }
                         }
-                        Button {
-                            text: "크롭 + 컷 실행";
-                            primary: true;
-                            enabled: video-loaded && !edit-busy && (trim-end - trim-start) > 0.05;
-                            clicked => { run-crop(); }
-                        }
+                        Button { text: "편집 작업 취소"; enabled: edit-busy; clicked => { cancel-edit(); } }
                     }
 
                     ProgressIndicator {
@@ -867,4 +910,5 @@ export component MainWindow inherits Window {
             }
         }
     }
+    FileNameTooltipLayer {}
 }

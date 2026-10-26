@@ -12,7 +12,7 @@ fn main() {
     // Slint's built-in image decoder doesn't always handle multi-res .ico well.
     let ico_path = Path::new("app.ico");
     let png_dest = Path::new("src/app.png");
-    
+
     if ico_path.exists() && !png_dest.exists() {
         if let Ok(img) = image::open(ico_path) {
             let _ = img.save(png_dest);
