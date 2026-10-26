@@ -1,35 +1,34 @@
 # VideoEncoder FFmpeg Wrapper
 
-A sleek, high-performance video encoding GUI built with **Rust** and **Slint**. This tool provides a modern interface for batch converting videos using **FFmpeg** with a focus on HEVC (H.265) encoding.
+[![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-light.svg)](https://slint.dev)
+
+A lightweight, high-performance video encoding GUI built with **Rust** and **Slint**. It batches video conversion through **FFmpeg**, optimized for HEVC (H.265).
 
  <img src="screenshot.png" alt="screenshot1" width="70%">
 
 ## Key Features
 
--   **Light / Dark Theme**: Switch themes with the toggle at the right of the title
--   **Native Windows Drag & Drop**: Seamlessly add files and folders by dragging them into the app window (implemented via low-level `WndProc` subclassing for maximum compatibility).
--   **HEVC (H.265) Optimization**: Default configurations tailored for high-quality, low-size H.265 encoding.
--   **Detailed Progress Tracking**: Real-time parsing of FFmpeg logs to show per-file percentage, encoding speed (x speed), and live bitrate.
--   **Batch Processing**: Queue multiple files and folders for sequential encoding.
--   **Video Editor (Trim / Cut / Crop)**: Built-in preview player with frame scrubbing, lossless cutting (`-c copy`), and an interactive crop overlay with HEVC re-encoding.
--   **Selectable Encoder (NVENC / x265)**: Hardware-accelerated NVIDIA NVENC encoding (default) or software x265 encoding, with the quality slider switching between CQ and CRF automatically.
--   **Customizable Options**: Easy adjustment of encoder, quality (CRF/CQ), output suffix, and target directory.
+-   **Light / Dark Theme**: Toggle at the right of the title; the native title bar follows the theme.
+-   **Native Windows Drag & Drop**: Drop files and folders anywhere on the window.
+-   **Selectable Encoder**: NVIDIA NVENC (H.265, default) or x265 (CPU). The quality slider switches between CQ and CRF automatically, and each encoder keeps its own value.
+-   **Batch Queue**: Add files or folders, reorder with ↑/↓, remove single items, clear the list, and retry only the failed jobs.
+-   **Detailed Progress**: Per-file and overall percentage, encoding speed (x), live bitrate, and Windows taskbar progress.
+-   **Audio / Subtitle Tracks**: Keep all audio tracks or only the first, and optionally preserve subtitles.
+-   **Persistent Settings & Presets**: Options are restored at launch and saved on exit; presets can be exported and imported as JSON.
+-   **Video Editor (Trim / Cut / Crop)**: Built-in preview player with frame scrubbing, fast or exact cutting, and an interactive crop overlay with HEVC re-encoding.
 
 ## Prerequisite
 
--   **[FFmpeg](https://ffmpeg.org/)**: You need `ffmpeg.exe` installed on your system. 
-    -   The app will automatically look for `ffmpeg.exe` in its own directory.
-    -   If not found, it will search your system `PATH`.
-    -   You can also manually select the path within the app.
--   **[FFplay](https://ffmpeg.org/)**: Required for **sound** in the video editor preview player.
-    -   Place `ffplay.exe` in the **same folder as `ffmpeg.exe`** (e.g., the app's own directory).
-    -   If not found there, the app falls back to searching your system `PATH`.
-    -   If `ffplay.exe` cannot be found at all, the preview plays **without sound**.
--   **[NVIDIA GPU](https://www.nvidia.com/) (optional)**: Required only for **NVENC (H.265)** hardware encoding. Select **x265 (CPU)** on systems without a supported NVIDIA GPU.
+-   **[FFmpeg](https://ffmpeg.org/)** (`ffmpeg`, `ffprobe`, `ffplay`): All three binaries are required.
+    -   `ffmpeg` encodes; `ffprobe` analyzes streams (duration, resolution, frame rate, codec types) and drives the progress percentage; `ffplay` provides sound in the editor preview (the preview still works silently without it).
+    -   Lookup order: the app's own folder (next to the configured `ffmpeg.exe`), then your system `PATH`. You can also set the path manually or with **Auto-detect**.
+-   **[NVIDIA GPU](https://www.nvidia.com/) (optional)**: Required only for **NVENC (H.265)**. Use **x265 (CPU)** on systems without a supported NVIDIA GPU.
 
 ## Getting Started
+
 ### 📥 Download
-You can download the latest version from the [Releases Page](https://github.com/kirinonakar/VideoEncoder/releases).
+
+Download the latest build from the [Releases Page](https://github.com/kirinonakar/VideoEncoder/releases).
 
 ### Manual build
 
@@ -38,38 +37,51 @@ You can download the latest version from the [Releases Page](https://github.com/
     git clone https://github.com/kirinonakar/VideoEncoder.git
     cd VideoEncoder
     ```
-2.  Ensure you have [Rust](https://www.rust-lang.org/tools/install) installed.
-3.  Build and run the project:
+2.  Install [Rust](https://www.rust-lang.org/tools/install).
+3.  Build and run:
     ```bash
     cargo run --release
     ```
 
 ## Encoder Options
 
--   **NVENC (H.265)** (default): Hardware-accelerated HEVC encoding on NVIDIA GPUs. Uses `-c:v hevc_nvenc -preset p7 -rc vbr -cq <quality> -b:v 0` (constant-quality VBR). Default quality: **CQ 20**.
--   **x265 (CPU)**: Software HEVC encoding that runs on any system. Uses `-c:v libx265 -crf <quality> -preset medium`. Default quality: **CRF 19**.
--   The quality slider automatically switches between **CRF** (x265) and **CQ** (NVENC) to match the selected encoder, and each encoder keeps its own quality value.
--   The selected encoder and quality are used for both batch conversion and the **crop re-encode** in the Video Editor tab.
--   **Reset Options** restores the defaults: encoder = NVENC, CQ = 20, CRF = 19, output suffix = `_h265`.
+-   **NVENC (H.265)** (default): `-c:v hevc_nvenc -preset p7 -rc vbr -cq <quality> -b:v 0` (constant-quality VBR). Default: **CQ 20**.
+-   **x265 (CPU)**: `-c:v libx265 -crf <quality> -preset medium`. Default: **CRF 19**.
+-   The selected encoder and quality are used for batch conversion and for crop / exact-cut re-encoding in the editor.
+-   **Reset Options** restores the defaults: NVENC, CQ 20, CRF 19, suffix `_h265`, output folder = source folder, all audio tracks on, subtitles off, fast cut mode.
+
+## Output & Track Handling
+
+-   **Output Suffix**: Appended to the source file name. Path separators (`/`, `\`, `:`) are rejected.
+-   **Output Folder**: Empty means the source folder.
+-   **All Audio Tracks**: On keeps every audio stream; off keeps only the first.
+-   **Preserve Subtitles**: Copies text subtitles (`mov_text` for MP4); incompatible subtitle codecs in MP4 are reported as an error instead of being silently dropped.
+-   **MP4 Compatibility**: Audio codecs that MP4 players commonly reject (DTS, FLAC, Opus, Vorbis, …) are re-encoded to AAC; AAC, MP3, AC-3, E-AC-3 and ALAC are copied.
+-   **Incomplete Outputs**: Files are written under a temporary name and renamed on success, so failed jobs never leave a usable-looking result.
+
+## Settings & Presets
+
+-   Settings are loaded at startup and saved automatically on exit to `%APPDATA%\VideoEncoder\settings.json` (`~/.config/VideoEncoder/settings.json` on other platforms).
+-   **Save Settings** writes the current state immediately.
+-   **Export / Import Preset** stores every option (FFmpeg path, encoder, quality, suffix, output folder, track options, cut mode, theme) in a JSON file.
+-   Older or partial JSON presets remain readable; missing values fall back to defaults.
 
 ## Video Editor (Trim / Cut / Crop)
 
-The app includes a lightweight video editor for quick trimming and cropping right in the main window.
-
--   **Preview Player**: Click or drag the upper playback timeline to seek through frames (frame extraction via FFmpeg) and preview the crop area in real time.
--   **Edit (편집 실행)**: One button automatically applies the crop region, selected time range, or both. With neither set, the app asks you to set a crop or time range before starting.
--   **Trim / Cut**: Set the start/end points with one two-handle range slider, aligned with the playback timeline, or the **Start / End point** buttons (minimum 0.05s). Green and red markers bound the sky-blue selection. Each handle also supports arrow keys and Home/End. With playback limiting off, adjusting the range preserves the playback position and play/pause state. Choose fast cut for stream copy (`-c copy`, with possible keyframe start error) or exact cut for frame-aligned HEVC/AAC re-encoding. Output: `{name}_cut.{ext}` or `{name}_cut_exact.mp4`.
--   **Crop**: Drag or resize the crop overlay directly on the preview. The selected region is applied via the FFmpeg `crop` filter and **re-encoded to HEVC (H.265)** using the configured encoder and quality (x265 CRF / NVENC CQ). Without a selected time range, the full video is cropped; when a range is selected, an exact cut is applied too, with audio re-encoded to AAC. Output: `{name}_crop.mp4`.
--   **Playback Limit / Rewind**: Toggle **Limit playback** to constrain seeking and playback to the selected start/end range; video and audio stop at the end. The SVG rewind button moves to the beginning of the video, or the selection start while limited, preserving play/pause state.
--   **Automatic Selection**: A full-frame crop leaves the image unchanged and uses the selected cut mode when a time range is set. Cropping always requires re-encoding, regardless of the cut mode.
--   **Live Feedback**: The crop coordinates (x, y, width, height) and output resolution are shown in real time, with a progress bar and status messages for both cut and crop jobs.
-
-## Technical Implementation Highlights
-
--   **Window Subclassing**: Uses `windows-sys` and `SetWindowLongPtrW` to hook into the Windows message loop (`WM_DROPFILES`), bypassing Slint's default D&D constraints to support administrator environments.
--   **Asynchronous Processing**: Leverages `tokio` for non-blocking FFmpeg execution and log parsing.
--   **Declarative UI**: Built using the [Slint](https://slint.dev/) UI framework for a responsive and lightweight experience.
+-   **Preview Player**: Click or drag the upper timeline to seek by frame (extracted via FFmpeg) and preview the crop area live.
+-   **Edit**: One button applies the crop region, the selected time range, or both. With neither set, the app asks you to define one first.
+-   **Trim / Cut**: Set the range with the two-handle slider aligned to the playback timeline or with **Set Start / Set End** (minimum 0.05 s). Each handle supports arrow keys and Home/End. **Fast cut** copies streams (`-c copy`, possible keyframe offset); **exact cut** frame-aligns the start and re-encodes HEVC plus AAC to MP4.
+    -   Output: `{name}_cut.{ext}` (fast) or `{name}_cut_exact.mp4` (exact).
+-   **Crop**: Drag or resize the overlay on the preview. The region is applied with the FFmpeg `crop` filter and re-encoded to HEVC using the configured encoder and quality. Without a time range the whole video is cropped; with a range an exact cut is applied too and audio is re-encoded to AAC.
+    -   Output: `{name}_crop.mp4`.
+-   **Playback Limit / Rewind**: **Limit playback** constrains seeking and playback to the selected range. Rewind jumps to the video start, or to the range start while limited, preserving play/pause state.
+-   **Live Feedback**: Crop coordinates, output resolution, progress bar and status messages are updated in real time, and running jobs can be cancelled.
 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Third-Party Notices
+
+-   **Slint** (GUI framework, v1.15) — Copyright © Slint GmbH. Slint is triple-licensed: [GPLv3](https://www.gnu.org/licenses/gpl-3.0.html), the [Slint Royalty-free Desktop and Web License](https://slint.dev/pricing), or a commercial license. This project's own code remains MIT; an open-source distribution can rely on the GPLv3 option (the combined binary is then covered by GPLv3), while a proprietary distribution needs the royalty-free license with Slint attribution or a commercial license.
+-   **FFmpeg / ffprobe / ffplay** — Copyright © the FFmpeg developers. This app does not bundle or link FFmpeg; it runs the binaries you provide as separate processes. FFmpeg is licensed under the [LGPL v2.1 or later](https://www.ffmpeg.org/legal.html), but builds configured with `--enable-gpl` (required for `libx265`, used by the **x265 (CPU)** encoder) are licensed under the GPL v2 or later. If you redistribute FFmpeg binaries with this app, you are responsible for complying with the license of that build (source availability, license texts, and attribution).
