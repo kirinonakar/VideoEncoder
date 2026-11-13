@@ -2,9 +2,9 @@
 use super::*;
 use std::{fs, path::Path};
 
-struct TestDir(PathBuf);
+pub(crate) struct TestDir(pub(crate) PathBuf);
 impl TestDir {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let path = std::env::temp_dir().join(format!(
             "videoencoder-media-{}-{}",
             std::process::id(),

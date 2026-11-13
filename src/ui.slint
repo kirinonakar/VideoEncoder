@@ -2,6 +2,7 @@ import { Button, ComboBox, LineEdit, Slider, HorizontalBox, VerticalBox, Progres
 import { AppTheme } from "theme.slint";
 import { EditorTimeline } from "editor-timeline.slint";
 import { FileNameText, FileNameTooltip, FileNameTooltipLayer } from "file-name.slint";
+import { ConversionTab } from "conversion-tab.slint";
 
 // Custom ComboBox: 긴 파일명은 "…"으로 생략(elide)하고 드롭다운 화살표는 항상 표시한다.
 component VideoFileComboBox {
@@ -274,6 +275,20 @@ export component MainWindow inherits Window {
     in-out property <string> video-info-text: "";
     in-out property <int> selected-index: 0;
 
+    callback pick-conversion-source();
+    callback start-conversion();
+    callback cancel-conversion();
+    in-out property <int> active-tab;
+    out property <bool> conversion-tab-active: active-tab == 2;
+    in-out property <string> conversion-source;
+    in-out property <int> conversion-format;
+    in-out property <string> conversion-width;
+    in-out property <string> conversion-height;
+    in-out property <bool> conversion-busy;
+    in-out property <float> conversion-progress;
+    in-out property <string> conversion-status;
+    in-out property <string> conversion-detail;
+
     VerticalBox {
         padding: 16px;
         spacing: 12px;
@@ -308,6 +323,7 @@ export component MainWindow inherits Window {
 
         TabWidget {
             vertical-stretch: 1;
+            current-index <=> root.active-tab;
 
             Tab {
                 title: "인코딩";
@@ -562,7 +578,7 @@ export component MainWindow inherits Window {
             Button {
                 text: "변환 시작";
                 primary: true;
-                enabled: !is-encoding && !edit-busy && file-list.length > 0;
+                enabled: !is-encoding && !edit-busy && !conversion-busy && file-list.length > 0;
                 clicked => { start-encoding(); }
                 height: 36px;
                 width: 180px;
@@ -575,7 +591,7 @@ export component MainWindow inherits Window {
                 height: 36px;
                 width: 120px;
             }
-            Button { text: "실패만 재시도"; enabled: !is-encoding && !edit-busy; clicked => { retry-failed(); } }
+            Button { text: "실패만 재시도"; enabled: !is-encoding && !edit-busy && !conversion-busy; clicked => { retry-failed(); } }
         }
                 }
             }
@@ -889,7 +905,7 @@ export component MainWindow inherits Window {
                         Button {
                             text: "편집 실행";
                             primary: true;
-                            enabled: video-loaded && !edit-busy && !is-encoding && (trim-end - trim-start) > 0.05;
+                            enabled: video-loaded && !edit-busy && !is-encoding && !conversion-busy && (trim-end - trim-start) > 0.05;
                             clicked => { run-edit(); }
                         }
                         Button { text: "편집 작업 취소"; enabled: edit-busy; clicked => { cancel-edit(); } }
@@ -906,6 +922,26 @@ export component MainWindow inherits Window {
                         color: AppTheme.text;
                         font-size: 12px;
                     }
+                }
+            }
+
+            Tab {
+                title: "변환";
+
+                ConversionTab {
+                    source: root.conversion-source;
+                    output-folder: root.output-folder;
+                    busy: root.conversion-busy;
+                    other-job-running: root.is-encoding || root.edit-busy;
+                    progress: root.conversion-progress;
+                    status: root.conversion-status;
+                    detail: root.conversion-detail;
+                    format-index <=> root.conversion-format;
+                    resize-width <=> root.conversion-width;
+                    resize-height <=> root.conversion-height;
+                    pick-source => { root.pick-conversion-source(); }
+                    start => { root.start-conversion(); }
+                    cancel => { root.cancel-conversion(); }
                 }
             }
         }

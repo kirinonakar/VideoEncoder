@@ -1,5 +1,5 @@
 use crate::{
-    MainWindow, editor,
+    MainWindow, conversion, editor,
     encoder::Cancel,
     job_queue::{self, Queue},
     windows::TaskbarProgress,
@@ -32,6 +32,7 @@ fn dropped_files_render_in_queue() {
     let queue = Queue::new(&ui);
     let workers = Arc::new(Mutex::new(Vec::new()));
     let taskbar = TaskbarProgress::new();
+    conversion::setup(&ui, Cancel::default(), workers.clone(), taskbar.clone());
     job_queue::setup(
         &ui,
         queue.clone(),
@@ -76,6 +77,17 @@ fn dropped_files_render_in_queue() {
     render();
     ui.invoke_clear_list();
     assert_eq!(ui.get_job_list().row_count(), 0);
+    render();
+    ui.set_active_tab(2);
+    assert!(ui.get_conversion_tab_active());
+    ui.invoke_files_dropped(path.to_string_lossy().as_ref().into());
+    assert_eq!(ui.get_conversion_source().as_str(), path.to_string_lossy());
+    assert_eq!(queue.files.row_count(), 0);
+    ui.set_ffmpeg_path("ffmpeg".into());
+    ui.set_conversion_height("0".into());
+    ui.invoke_start_conversion();
+    assert!(!ui.get_conversion_busy());
+    assert!(ui.get_conversion_status().contains("세로"));
     render();
     ui.hide().unwrap();
     preview.stop_playback();

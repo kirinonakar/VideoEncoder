@@ -1,6 +1,7 @@
 use crate::{
     JobItem, MainWindow,
     encoder::{self, Cancel, EncodeJob},
+    output,
     seconds_to_hms, settings,
     windows::TaskbarProgress,
 };
@@ -91,7 +92,7 @@ fn start(
     workers: &Arc<Mutex<Vec<JoinHandle<()>>>>,
     taskbar: TaskbarProgress,
 ) {
-    if ui.get_is_encoding() || ui.get_edit_busy() {
+    if ui.get_is_encoding() || ui.get_edit_busy() || ui.get_conversion_busy() {
         return;
     }
     let ffmpeg = ui.get_ffmpeg_path().to_string();
@@ -112,7 +113,7 @@ fn start(
         return;
     }
     let options = settings::encode_options(ui);
-    let out_folder = ui.get_output_folder().to_string();
+    let out_folder = PathBuf::from(ui.get_output_folder().as_str());
     ui.set_is_encoding(true);
     ui.set_overall_progress(0.0);
     ui.set_file_progress(0.0);
@@ -132,13 +133,8 @@ fn start(
             if cancel.stopped() {
                 break;
             }
-            let output_parent = if out_folder.is_empty() {
-                src.parent().unwrap_or_else(|| Path::new(".")).to_owned()
-            } else {
-                PathBuf::from(&out_folder)
-            };
             let stem = src.file_stem().unwrap_or_default().to_string_lossy();
-            let output = output_parent.join(format!("{stem}{suffix}.mp4"));
+            let output = output::directory(&src, &out_folder).join(format!("{stem}{suffix}.mp4"));
             let name = src
                 .file_name()
                 .unwrap_or_default()

@@ -22,6 +22,8 @@ pub struct Stream {
     #[serde(default)]
     pub duration: Option<String>,
     #[serde(default)]
+    pub nb_frames: Option<String>,
+    #[serde(default)]
     pub disposition: Disposition,
 }
 #[derive(Debug, Default, Deserialize)]
@@ -33,6 +35,13 @@ pub struct Disposition {
 pub struct Format {
     #[serde(default)]
     pub duration: Option<String>,
+    #[serde(default)]
+    pub tags: FormatTags,
+}
+#[derive(Debug, Default, Deserialize)]
+pub struct FormatTags {
+    #[serde(default)]
+    pub major_brand: String,
 }
 #[derive(Debug, Deserialize)]
 pub struct Media {

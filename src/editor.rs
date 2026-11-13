@@ -1,8 +1,10 @@
 use crate::{
     MainWindow,
+    conversion,
     encoder::{self, Cancel, EncodeJob},
     job_queue::Queue,
     job_queue::is_video_file,
+    output,
     preview::{FrameRequester, enforce_playback_range, move_preview, playback_range},
     probe::probe_video,
     seconds_to_hms, settings,
@@ -111,6 +113,10 @@ pub fn setup(
             let Some(ui) = weak.upgrade() else {
                 return;
             };
+            if ui.get_conversion_tab_active() {
+                conversion::select_dropped_source(&ui, paths_str.as_str());
+                return;
+            }
             if ui.get_is_encoding() || ui.get_edit_busy() {
                 return;
             }
@@ -529,7 +535,7 @@ fn launch_edit(
     workers: &Arc<Mutex<Vec<JoinHandle<()>>>>,
     taskbar: TaskbarProgress,
 ) {
-    if ui.get_is_encoding() || ui.get_edit_busy() {
+    if ui.get_is_encoding() || ui.get_edit_busy() || ui.get_conversion_busy() {
         return;
     }
     let ffmpeg = ui.get_ffmpeg_path().to_string();
@@ -586,15 +592,9 @@ fn launch_edit(
     } else {
         "cut"
     };
-    let folder = ui.get_output_folder().to_string();
-    let parent = if folder.is_empty() {
-        src.parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .to_owned()
-    } else {
-        PathBuf::from(folder)
-    };
-    let output = parent.join(format!("{stem}_{suffix}.{ext}"));
+    let folder = ui.get_output_folder();
+    let output = output::directory(&src, std::path::Path::new(folder.as_str()))
+        .join(format!("{stem}_{suffix}.{ext}"));
     let label = if filter.is_some() && range.is_some() {
         "크롭 + 정확한 컷"
     } else if filter.is_some() {

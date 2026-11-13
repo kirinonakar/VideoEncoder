@@ -5,7 +5,7 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use std::{
     collections::VecDeque,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Stdio,
     sync::{
         Arc,
@@ -233,7 +233,18 @@ pub async fn run(
         cmd.args(["-c:v", "copy", "-avoid_negative_ts", "make_zero"]);
         map_tracks(&mut cmd, &media, job.tracks, mp4, false)?;
     }
-    let output = OutputFile::reserve(&job.output).context("출력 파일 생성 실패")?;
+    run_to_output(cmd, &job.output, duration, cancel, on_progress).await
+}
+
+pub async fn run_to_output(
+    mut cmd: Command,
+    path: &Path,
+    duration: f32,
+    cancel: &Cancel,
+    on_progress: impl Fn(Progress),
+) -> Result<PathBuf> {
+    ensure!(!cancel.stopped(), "작업 취소됨");
+    let output = OutputFile::reserve(path).context("출력 파일 생성 실패")?;
     cmd.args(["-progress", "pipe:2"])
         .arg(&output.incomplete)
         .stderr(Stdio::piped())
@@ -251,7 +262,7 @@ pub async fn run(
 
 #[cfg(test)]
 #[path = "encoder_tests.rs"]
-mod integration_tests;
+pub(crate) mod integration_tests;
 
 #[cfg(test)]
 mod tests {

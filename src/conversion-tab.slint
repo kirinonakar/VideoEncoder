@@ -1,0 +1,136 @@
+import { Button, ComboBox, LineEdit, ProgressIndicator, TextEdit } from "std-widgets.slint";
+import { AppTheme } from "theme.slint";
+import { FileNameText } from "file-name.slint";
+
+export component ConversionTab inherits VerticalLayout {
+    in property <string> source;
+    in property <string> output-folder;
+    in property <bool> busy;
+    in property <bool> other-job-running;
+    in property <float> progress;
+    in property <string> status;
+    in property <string> detail;
+    in-out property <int> format-index;
+    in-out property <string> resize-width;
+    in-out property <string> resize-height;
+    callback pick-source();
+    callback start();
+    callback cancel();
+
+    padding: 10px;
+    spacing: 12px;
+
+    Rectangle {
+        vertical-stretch: 0;
+        background: AppTheme.surface;
+        border-color: AppTheme.border;
+        border-width: 1px;
+        border-radius: 12px;
+
+        VerticalLayout {
+            padding: 12px;
+            spacing: 10px;
+
+            HorizontalLayout {
+                spacing: 10px;
+                Text { text: "원본 파일"; width: 84px; color: AppTheme.text; vertical-alignment: center; }
+                Rectangle {
+                    horizontal-stretch: 1;
+                    source-hover := TouchArea { }
+                    FileNameText {
+                        width: parent.width;
+                        height: parent.height;
+                        text: root.source != "" ? root.source : "변환할 파일을 선택하거나 이 탭에 놓으세요.";
+                        color: root.source != "" ? AppTheme.text : AppTheme.muted;
+                        hovered: source-hover.has-hover;
+                    }
+                }
+                Button { text: "파일 선택…"; enabled: !root.busy; clicked => { root.pick-source(); } }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+                Text { text: "출력 형식"; width: 84px; color: AppTheme.text; vertical-alignment: center; }
+                ComboBox {
+                    width: 200px;
+                    model: ["Animated GIF", "Animated WebP", "Animated AVIF"];
+                    current-index <=> root.format-index;
+                    enabled: !root.busy;
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+                Text { text: "출력 크기"; width: 84px; color: AppTheme.text; vertical-alignment: center; }
+                LineEdit {
+                    width: 100px;
+                    text <=> root.resize-width;
+                    placeholder-text: "가로 (px)";
+                    input-type: number;
+                    enabled: !root.busy;
+                }
+                Text { text: "×"; color: AppTheme.muted; vertical-alignment: center; }
+                LineEdit {
+                    width: 100px;
+                    text <=> root.resize-height;
+                    placeholder-text: "세로 (px)";
+                    input-type: number;
+                    enabled: !root.busy;
+                }
+                Text {
+                    horizontal-stretch: 1;
+                    text: "한쪽만 입력하면 비율 유지 · 모두 비우면 원본 크기";
+                    color: AppTheme.muted;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+                Text { text: "출력 폴더"; width: 84px; color: AppTheme.text; vertical-alignment: center; }
+                Rectangle {
+                    horizontal-stretch: 1;
+                    folder-hover := TouchArea { }
+                    FileNameText {
+                        width: parent.width;
+                        height: parent.height;
+                        text: root.output-folder != "" ? root.output-folder : "원본과 같은 폴더";
+                        hovered: folder-hover.has-hover;
+                    }
+                }
+                Text { text: "인코딩 탭에서 설정"; color: AppTheme.muted; font-size: 12px; vertical-alignment: center; }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 10px;
+        Button {
+            text: "변환 시작";
+            primary: true;
+            enabled: root.source != "" && !root.busy && !root.other-job-running;
+            clicked => { root.start(); }
+        }
+        Button { text: "취소"; enabled: root.busy; clicked => { root.cancel(); } }
+        Rectangle { horizontal-stretch: 1; }
+    }
+
+    ProgressIndicator {
+        height: 8px;
+        progress: root.progress;
+        indeterminate: root.busy && root.progress == 0;
+    }
+
+    Text { text: root.status; color: AppTheme.text; wrap: word-wrap; }
+    if root.detail != "": TextEdit {
+        text: root.detail;
+        read-only: true;
+        wrap: char-wrap;
+        height: 112px;
+        vertical-stretch: 0;
+    }
+    Rectangle { vertical-stretch: 1; }
+}

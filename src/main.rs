@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 slint::include_modules!();
+mod conversion;
 mod editor;
 mod encoder;
 mod job_queue;
@@ -8,9 +9,9 @@ mod playback_range;
 mod preview;
 mod probe;
 mod settings;
-mod windows;
 #[cfg(test)]
 mod ui_tests;
+mod windows;
 
 use slint::ComponentHandle;
 use std::sync::{Arc, Mutex};
@@ -39,7 +40,14 @@ async fn main() -> anyhow::Result<()> {
     let queue = job_queue::Queue::new(&ui);
     let batch_cancel = encoder::Cancel::default();
     let edit_cancel = encoder::Cancel::default();
+    let conversion_cancel = encoder::Cancel::default();
     let workers = Arc::new(Mutex::new(Vec::new()));
+    conversion::setup(
+        &ui,
+        conversion_cancel.clone(),
+        workers.clone(),
+        taskbar.clone(),
+    );
     job_queue::setup(
         &ui,
         queue.clone(),
@@ -58,6 +66,7 @@ async fn main() -> anyhow::Result<()> {
     let result = ui.run();
     batch_cancel.stop();
     edit_cancel.stop();
+    conversion_cancel.stop();
     preview.stop_playback();
     let handles = std::mem::take(&mut *workers.lock().unwrap());
     for handle in handles {

@@ -1,7 +1,5 @@
 # VideoEncoder FFmpeg Wrapper
 
-[![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-light.svg)](https://slint.dev)
-
 A lightweight, high-performance video encoding GUI built with **Rust** and **Slint**. It batches video conversion through **FFmpeg**, optimized for HEVC (H.265).
 
  <img src="screenshot.png" alt="screenshot1" width="70%">
@@ -16,6 +14,7 @@ A lightweight, high-performance video encoding GUI built with **Rust** and **Sli
 -   **Audio / Subtitle Tracks**: Keep all audio tracks or only the first, and optionally preserve subtitles.
 -   **Persistent Settings & Presets**: Options are restored at launch and saved on exit; presets can be exported and imported as JSON.
 -   **Video Editor (Trim / Cut / Crop)**: Built-in preview player with frame scrubbing, fast or exact cutting, and an interactive crop overlay with HEVC re-encoding.
+-   **Animation Conversion**: Convert video or animated images to looping GIF, WebP, or AVIF, with optional resizing.
 
 ## Prerequisite
 
@@ -77,6 +76,13 @@ Download the latest build from the [Releases Page](https://github.com/kirinonaka
 -   **Playback Limit / Rewind**: **Limit playback** constrains seeking and playback to the selected range. Rewind jumps to the video start, or to the range start while limited, preserving play/pause state.
 -   **Live Feedback**: Crop coordinates, output resolution, progress bar and status messages are updated in real time, and running jobs can be cancelled.
 
+## Animation Conversion
+
+-   In **Convert**, select or drop a source file and choose **Animated GIF**, **Animated WebP**, or **Animated AVIF**.
+-   Leave both size fields blank for the original resolution. Enter one dimension in pixels to preserve the aspect ratio, or enter both for an exact size.
+-   Conversion uses the **Output Folder** from the encoding tab. A blank folder saves next to the source. Outputs use the source name with the selected extension, adding a number if the name is taken.
+-   WebP output requires `libwebp_anim`, and AVIF output requires `libaom-av1` and the AVIF muxer. Animated WebP input requires an FFmpeg build with an animated WebP decoder.
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
@@ -84,4 +90,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Third-Party Notices
 
 -   **Slint** (GUI framework, v1.15) — Copyright © Slint GmbH. Slint is triple-licensed: [GPLv3](https://www.gnu.org/licenses/gpl-3.0.html), the [Slint Royalty-free Desktop and Web License](https://slint.dev/pricing), or a commercial license. This project's own code remains MIT; an open-source distribution can rely on the GPLv3 option (the combined binary is then covered by GPLv3), while a proprietary distribution needs the royalty-free license with Slint attribution or a commercial license.
+[![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-light.svg)](https://slint.dev)
 -   **FFmpeg / ffprobe / ffplay** — Copyright © the FFmpeg developers. This app does not bundle or link FFmpeg; it runs the binaries you provide as separate processes. FFmpeg is licensed under the [LGPL v2.1 or later](https://www.ffmpeg.org/legal.html), but builds configured with `--enable-gpl` (required for `libx265`, used by the **x265 (CPU)** encoder) are licensed under the GPL v2 or later. If you redistribute FFmpeg binaries with this app, you are responsible for complying with the license of that build (source availability, license texts, and attribution).

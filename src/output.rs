@@ -4,6 +4,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub fn directory<'a>(source: &'a Path, configured: &'a Path) -> &'a Path {
+    if configured.as_os_str().is_empty() {
+        source.parent().unwrap_or_else(|| Path::new("."))
+    } else {
+        configured
+    }
+}
+
 #[cfg(windows)]
 fn publish_no_replace(source: &Path, target: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
