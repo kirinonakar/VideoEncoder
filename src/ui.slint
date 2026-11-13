@@ -209,14 +209,18 @@ export component MainWindow inherits Window {
     callback move-job(int, int);
     callback retry-failed();
     callback save-settings();
-    callback export-preset();
-    callback import-preset();
+    callback save-preset();
+    callback select-preset(int);
     callback cancel-edit();
     in-out property <[JobItem]> job-list;
     in-out property <LocalizedText> error-details;
     in-out property <bool> all-audio: true;
     in-out property <bool> preserve-subtitles: false;
     in-out property <int> cut-mode: 0;
+    in property <[string]> preset-names;
+    in-out property <int> preset-index;
+    in-out property <string> preset-name;
+    out property <bool> preset-options-enabled: !is-encoding && !edit-busy && !conversion-busy;
     
     // Custom callback for D&D trigger from Rust
     callback files-dropped(string);
@@ -292,7 +296,7 @@ export component MainWindow inherits Window {
     in-out property <int> active-tab;
     out property <bool> conversion-tab-active: active-tab == 2;
     in-out property <[ConversionItem]> conversion-jobs;
-    in-out property <int> conversion-format;
+    in-out property <int> conversion-format: 2;
     in-out property <string> conversion-width;
     in-out property <string> conversion-height;
     in-out property <bool> conversion-busy;
@@ -454,8 +458,30 @@ export component MainWindow inherits Window {
                         clicked => { reset-options(); }
                     }
                     Button { text: AppLanguage.tr("Save settings", "설정 저장"); clicked => { save-settings(); } }
-                    Button { text: AppLanguage.tr("Save preset", "프리셋 저장"); clicked => { export-preset(); } }
-                    Button { text: AppLanguage.tr("Load preset", "프리셋 열기"); enabled: !is-encoding && !edit-busy; clicked => { import-preset(); } }
+                }
+
+                HorizontalLayout {
+                    spacing: 12px;
+                    Text { text: AppLanguage.tr("Preset:", "프리셋:"); color: AppTheme.text; vertical-alignment: center; width: 100px; font-weight: 500; }
+                    ComboBox {
+                        accessible-label: AppLanguage.tr("Preset", "프리셋");
+                        model: root.preset-names;
+                        current-index <=> root.preset-index;
+                        enabled: root.preset-options-enabled && root.preset-names.length > 1;
+                        selected => { root.select-preset(self.current-index); }
+                    }
+                    LineEdit {
+                        accessible-label: AppLanguage.tr("Preset name", "프리셋 이름");
+                        placeholder-text: AppLanguage.tr("Preset name", "프리셋 이름");
+                        text <=> root.preset-name;
+                        enabled: root.preset-options-enabled;
+                        accepted => { root.save-preset(); }
+                    }
+                    Button {
+                        text: AppLanguage.tr("Save preset", "프리셋 저장");
+                        enabled: root.preset-options-enabled && root.preset-name != "";
+                        clicked => { root.save-preset(); }
+                    }
                 }
             }
         }

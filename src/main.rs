@@ -32,8 +32,7 @@ fn seconds_to_hms(seconds: f32) -> String {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let ui = MainWindow::new()?;
-    let settings_path = settings::settings_path();
-    settings::setup(&ui, settings_path.clone());
+    let settings = settings::setup(&ui, settings::settings_path());
     let taskbar = windows::TaskbarProgress::new();
     let weak = ui.as_weak();
     ui.on_native_theme_changed(move || {
@@ -79,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
     for handle in handles {
         let _ = handle.await;
     }
-    if let Err(e) = settings::Settings::capture(&ui).save(&settings_path) {
+    if let Err(e) = settings.save(&ui) {
         let language = Language::current(&ui);
         let title = language.select("Could not save settings", "설정 저장 실패");
         let error = diagnostic(&e);

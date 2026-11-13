@@ -13,7 +13,7 @@ A lightweight, high-performance video encoding GUI built with **Rust** and **Sli
 -   **Batch Queue**: Add files or folders, see the source resolution and playback duration under each file, reorder with ↑/↓, remove single items, clear the list, and retry only the failed jobs.
 -   **Detailed Progress**: Per-file and overall percentage, encoding speed (x), live bitrate, and Windows taskbar progress.
 -   **Audio / Subtitle Tracks**: Keep all audio tracks or only the first, and optionally preserve subtitles.
--   **Persistent Settings & Presets**: Options are restored at launch and saved on exit; presets can be exported and imported as JSON.
+-   **Persistent Settings & Presets**: Options are restored at launch and saved on exit. Save named presets and apply them from the encoding tab.
 -   **Video Editor (Trim / Cut / Crop)**: Built-in preview player with frame scrubbing, fast or exact cutting, and an interactive crop overlay with HEVC re-encoding.
 -   **Animation Conversion**: Convert video or animated images to looping GIF, WebP, or AVIF, with optional resizing.
 
@@ -63,9 +63,9 @@ Download the latest build from the [Releases Page](https://github.com/kirinonaka
 
 -   Settings are loaded at startup and saved automatically on exit to `%APPDATA%\VideoEncoder\settings.json` (`~/.config/VideoEncoder/settings.json` on other platforms).
 -   **Save Settings** writes the current state immediately.
--   **Export / Import Preset** stores every option (FFmpeg path, encoder, quality, suffix, output folder, track options, cut mode, theme) in a JSON file.
--   **Language** (Korean / English) is saved with the settings file and restored at launch. Exported presets do not include it, so importing a preset never changes the current language.
--   Older or partial JSON presets remain readable; missing values fall back to defaults.
+-   In **Encode**, enter a preset name and click **Save preset** to store the current options in `settings.json`. Saving with an existing name updates that preset.
+-   Choose a preset from the dropdown to apply its FFmpeg path, encoder, quality, suffix, output folder, track options, cut mode, theme, and conversion format.
+-   **Language** (Korean / English) is saved as an app setting and restored at launch.
 
 ## Video Editor (Trim / Cut / Crop)
 

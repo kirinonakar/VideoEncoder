@@ -5,12 +5,33 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use slint::ComponentHandle;
-use std::path::{Path, PathBuf};
+use slint::{ComponentHandle, Model, VecModel};
+use std::{
+    cell::RefCell,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Settings {
+struct Settings {
+    #[serde(flatten)]
+    options: Options,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    language: Option<Language>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    presets: Vec<NamedPreset>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct NamedPreset {
+    name: String,
+    options: Options,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
+struct Options {
     ffmpeg: String,
     suffix: String,
     encoder: i32,
@@ -22,9 +43,10 @@ pub struct Settings {
     exact_cut: bool,
     dark: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    language: Option<Language>,
+    conversion_format: Option<i32>,
 }
-impl Default for Settings {
+
+impl Default for Options {
     fn default() -> Self {
         Self {
             ffmpeg: String::new(),
@@ -37,7 +59,7 @@ impl Default for Settings {
             subtitles: false,
             exact_cut: false,
             dark: false,
-            language: None,
+            conversion_format: None,
         }
     }
 }
@@ -55,13 +77,35 @@ pub fn settings_path() -> PathBuf {
         .join("settings.json")
 }
 impl Settings {
-    pub fn read(path: &Path) -> Result<Self> {
+    fn read(path: &Path) -> Result<Self> {
         serde_json::from_slice(&std::fs::read(path)?).context(message!(
             "Could not read settings JSON",
             "설정 JSON 읽기 실패"
         ))
     }
-    pub fn capture(ui: &MainWindow) -> Self {
+    fn capture(ui: &MainWindow, presets: Vec<NamedPreset>) -> Self {
+        Self {
+            options: Options::capture(ui),
+            language: Some(Language::current(ui)),
+            presets,
+        }
+    }
+
+    fn save(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let temp = path.with_extension("json.tmp");
+        std::fs::write(&temp, serde_json::to_vec_pretty(self)?)?;
+        std::fs::rename(temp, path).context(message!(
+            "Could not write settings file",
+            "설정 파일 저장 실패"
+        ))
+    }
+}
+
+impl Options {
+    fn capture(ui: &MainWindow) -> Self {
         Self {
             ffmpeg: ui.get_ffmpeg_path().into(),
             suffix: ui.get_output_suffix().into(),
@@ -73,10 +117,10 @@ impl Settings {
             subtitles: ui.get_preserve_subtitles(),
             exact_cut: ui.get_cut_mode() == 1,
             dark: ui.get_dark_mode(),
-            language: Some(Language::current(ui)),
+            conversion_format: Some(ui.get_conversion_format()),
         }
     }
-    pub fn apply(&self, ui: &MainWindow) {
+    fn apply(&self, ui: &MainWindow) {
         ui.set_ffmpeg_path(self.ffmpeg.clone().into());
         ui.set_output_suffix(self.suffix.clone().into());
         ui.set_encoder_index(self.encoder.clamp(0, 1));
@@ -95,17 +139,42 @@ impl Settings {
         ui.set_preserve_subtitles(self.subtitles);
         ui.set_cut_mode(i32::from(self.exact_cut));
         ui.set_dark_mode(self.dark);
-    }
-    pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+        if let Some(format @ 0..=2) = self.conversion_format {
+            ui.set_conversion_format(format);
         }
-        let temp = path.with_extension("json.tmp");
-        std::fs::write(&temp, serde_json::to_vec_pretty(self)?)?;
-        std::fs::rename(temp, path).context(message!(
-            "Could not write settings file",
-            "설정 파일 저장 실패"
-        ))
+    }
+}
+
+pub struct SettingsFile {
+    path: PathBuf,
+    presets: RefCell<Vec<NamedPreset>>,
+}
+
+impl SettingsFile {
+    pub fn save(&self, ui: &MainWindow) -> Result<()> {
+        Settings::capture(ui, self.presets.borrow().clone()).save(&self.path)
+    }
+
+    fn save_preset(&self, ui: &MainWindow, name: &str) -> Result<usize> {
+        let mut settings = Settings::capture(ui, self.presets.borrow().clone());
+        let preset = NamedPreset {
+            name: name.to_owned(),
+            options: settings.options.clone(),
+        };
+        let index = settings
+            .presets
+            .iter()
+            .position(|preset| preset.name == name);
+        let index = if let Some(index) = index {
+            settings.presets[index] = preset;
+            index
+        } else {
+            settings.presets.push(preset);
+            settings.presets.len() - 1
+        };
+        settings.save(&self.path)?;
+        *self.presets.borrow_mut() = settings.presets;
+        Ok(index)
     }
 }
 pub fn tracks(ui: &MainWindow) -> Tracks {
@@ -138,21 +207,19 @@ fn discover_ffmpeg() -> Option<PathBuf> {
         .filter(|p| p.is_file())
         .or_else(|| which::which(name).ok())
 }
-pub fn setup(ui: &MainWindow, path: PathBuf) {
+pub fn setup(ui: &MainWindow, path: PathBuf) -> Rc<SettingsFile> {
     ui.set_korean(Language::system() == Language::Ko);
-    match Settings::read(&path) {
-        Ok(settings) => {
-            settings.apply(ui);
-            if let Some(language) = settings.language {
-                ui.set_korean(language == Language::Ko);
-            }
-        }
-        Err(e) if path.exists() => {
+    let settings = Settings::read(&path).unwrap_or_else(|error| {
+        if path.exists() {
             ui.set_current_file_text(diagnostic(
-                &e.context(message!("Could not load settings", "설정 불러오기 실패")),
+                &error.context(message!("Could not load settings", "설정 불러오기 실패")),
             ));
         }
-        _ => Settings::default().apply(ui),
+        Settings::default()
+    });
+    settings.options.apply(ui);
+    if let Some(language) = settings.language {
+        ui.set_korean(language == Language::Ko);
     }
     if ui.get_ffmpeg_path().is_empty() {
         if let Some(path) = discover_ffmpeg() {
@@ -180,76 +247,110 @@ pub fn setup(ui: &MainWindow, path: PathBuf) {
             }
         }
     });
+    let names = Rc::new(VecModel::from(
+        std::iter::once("—".into())
+            .chain(
+                settings
+                    .presets
+                    .iter()
+                    .map(|preset| preset.name.as_str().into()),
+            )
+            .collect::<Vec<_>>(),
+    ));
+    ui.set_preset_names(names.clone().into());
+    let file = Rc::new(SettingsFile {
+        path,
+        presets: RefCell::new(settings.presets),
+    });
+
     let weak = ui.as_weak();
+    let settings = file.clone();
     ui.on_save_settings(move || {
         if let Some(ui) = weak.upgrade() {
-            let result = Settings::capture(&ui).save(&path);
-            ui.set_current_file_text(match result {
-                Ok(()) => message!("Settings saved: {}", "설정 저장: {}", path.display()),
-                Err(e) => {
-                    diagnostic(&e.context(message!("Could not save settings", "설정 저장 실패")))
-                }
+            ui.set_current_file_text(match settings.save(&ui) {
+                Ok(()) => message!(
+                    "Settings saved: {}",
+                    "설정 저장: {}",
+                    settings.path.display()
+                ),
+                Err(error) => diagnostic(
+                    &error.context(message!("Could not save settings", "설정 저장 실패")),
+                ),
             });
         }
     });
+
     let weak = ui.as_weak();
-    ui.on_export_preset(move || {
+    let settings = file.clone();
+    ui.on_save_preset(move || {
         if let Some(ui) = weak.upgrade() {
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("JSON", &["json"])
-                .set_file_name("preset.json")
-                .save_file()
-            {
-                let preset = Settings {
-                    language: None,
-                    ..Settings::capture(&ui)
-                };
-                let result = preset.save(&path);
-                ui.set_current_file_text(match result {
-                    Ok(()) => message!("Preset saved", "프리셋 저장 완료"),
-                    Err(e) => diagnostic(
-                        &e.context(message!("Could not save preset", "프리셋 저장 실패")),
-                    ),
-                });
-            }
-        }
-    });
-    let weak = ui.as_weak();
-    ui.on_import_preset(move || {
-        if let Some(ui) = weak.upgrade() {
-            if ui.get_is_encoding() || ui.get_edit_busy() {
+            if !ui.get_preset_options_enabled() {
                 return;
             }
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("JSON", &["json"])
-                .pick_file()
-            {
-                match Settings::read(&path) {
-                    Ok(settings) => {
-                        settings.apply(&ui);
-                        ui.set_current_file_text(message!("Preset loaded", "프리셋 불러오기 완료"));
+            let input = ui.get_preset_name();
+            let name = input.trim();
+            if name.is_empty() {
+                ui.set_current_file_text(message!(
+                    "Enter a preset name.",
+                    "프리셋 이름을 입력하세요."
+                ));
+                return;
+            }
+            ui.set_current_file_text(match settings.save_preset(&ui, name) {
+                Ok(index) => {
+                    let row = index + 1;
+                    if row == names.row_count() {
+                        names.push(name.into());
                     }
-                    Err(e) => ui.set_current_file_text(diagnostic(
-                        &e.context(message!("Could not load preset", "프리셋 불러오기 실패")),
-                    )),
+                    ui.set_preset_index(row as i32);
+                    ui.set_preset_name(name.into());
+                    message!("Preset saved: {}", "프리셋 저장 완료: {}", name)
                 }
+                Err(error) => diagnostic(
+                    &error.context(message!("Could not save preset", "프리셋 저장 실패")),
+                ),
+            });
+        }
+    });
+
+    let weak = ui.as_weak();
+    let settings = file.clone();
+    ui.on_select_preset(move |row| {
+        if let Some(ui) = weak.upgrade() {
+            if !ui.get_preset_options_enabled() {
+                return;
+            }
+            if row <= 0 {
+                ui.set_preset_name("".into());
+                return;
+            }
+            if let Some(preset) = settings.presets.borrow().get(row as usize - 1) {
+                preset.options.apply(&ui);
+                ui.set_preset_name(preset.name.as_str().into());
+                ui.set_current_file_text(message!(
+                    "Preset loaded: {}",
+                    "프리셋 불러오기 완료: {}",
+                    preset.name
+                ));
             }
         }
     });
+    file
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn settings_roundtrip_and_older_partial_presets() {
+    fn settings_roundtrip_and_older_partial_settings() {
         let settings: Settings =
             serde_json::from_str(r#"{"encoder":0,"crf":23,"all_audio":false}"#).unwrap();
-        assert_eq!(settings.encoder, 0);
-        assert_eq!(settings.crf, 23.0);
-        assert!(!settings.all_audio);
-        assert_eq!(settings.suffix, "_h265");
+        assert_eq!(settings.options.encoder, 0);
+        assert_eq!(settings.options.crf, 23.0);
+        assert!(!settings.options.all_audio);
+        assert_eq!(settings.options.suffix, "_h265");
         assert_eq!(settings.language, None);
+        assert!(settings.presets.is_empty());
         let korean: Settings = serde_json::from_str(r#"{"language":"KO"}"#).unwrap();
         assert_eq!(korean.language, Some(Language::Ko));
         let english = Settings {
@@ -259,13 +360,13 @@ mod tests {
         assert_eq!(serde_json::to_value(english).unwrap()["language"], "EN");
         let decoded: Settings =
             serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
-        assert_eq!(decoded.crf, settings.crf);
+        assert_eq!(decoded.options.crf, settings.options.crf);
         assert!(serde_json::from_str::<Settings>("invalid").is_err());
         let path =
             std::env::temp_dir().join(format!("videoencoder-settings-{}.json", std::process::id()));
         settings.save(&path).unwrap();
         Settings::default().save(&path).unwrap();
-        assert_eq!(Settings::read(&path).unwrap().encoder, 1);
+        assert_eq!(Settings::read(&path).unwrap().options.encoder, 1);
         assert!(!path.with_extension("json.tmp").exists());
         std::fs::remove_file(path).unwrap();
     }

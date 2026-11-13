@@ -14,6 +14,7 @@ use slint::{
     },
 };
 use std::{
+    path::Path,
     rc::Rc,
     sync::{Arc, Mutex, mpsc},
 };
@@ -102,7 +103,7 @@ fn render_dropped_files() {
     };
     render();
     ui.set_cut_mode(1);
-    ui.set_conversion_format(2);
+    assert_eq!(ui.get_conversion_format(), 2);
     let toggle_language = || {
         let position = LogicalPosition::new(812.0, 34.0);
         let button = PointerEventButton::Left;
@@ -117,15 +118,20 @@ fn render_dropped_files() {
     assert_eq!(ui.get_cut_mode(), 1);
     assert_eq!(ui.get_conversion_format(), 2);
     assert!(!ui.get_dark_mode());
+    ui.set_conversion_format(1);
     ui.invoke_save_settings();
     let saved: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&settings_path).unwrap()).unwrap();
     assert_eq!(saved["language"], "KO");
+    assert_eq!(saved["conversion_format"], 1);
+    ui.set_conversion_format(2);
+    settings::setup(&ui, settings_path.clone());
+    ui.set_ffmpeg_path("".into());
     toggle_language();
     render();
     assert!(!ui.get_korean());
     assert_eq!(ui.get_cut_mode(), 1);
-    assert_eq!(ui.get_conversion_format(), 2);
+    assert_eq!(ui.get_conversion_format(), 1);
     ui.set_conversion_format(0);
     let path = directory.join(format!(
         "긴 파일명_日本語_{}.mp4",
@@ -180,12 +186,64 @@ fn render_dropped_files() {
         check_conversion_batch(&ui, &events);
         render();
     }
+    ui.set_active_tab(0);
+    check_named_presets(&ui, &settings_path);
+    render();
     ui.hide().unwrap();
     preview.stop_playback();
     std::fs::remove_file(path).unwrap();
     std::fs::remove_file(other).unwrap();
     std::fs::remove_file(settings_path).unwrap();
     std::fs::remove_dir(directory).unwrap();
+}
+
+fn check_named_presets(ui: &MainWindow, path: &Path) {
+    let read_settings =
+        || -> serde_json::Value { serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap() };
+    let settings = settings::setup(ui, path.to_owned());
+    ui.set_korean(false);
+    ui.set_encoder_index(0);
+    ui.set_crf_value(24.0);
+    ui.set_output_suffix("_cpu".into());
+    ui.set_conversion_format(1);
+    ui.set_preset_name("  고화질  ".into());
+    ui.invoke_save_preset();
+    assert_eq!(ui.get_preset_index(), 1);
+    assert_eq!(ui.get_preset_names().row_data(1).unwrap(), "고화질");
+    assert_eq!(read_settings()["presets"][0]["options"]["crf"], 24.0);
+
+    ui.set_encoder_index(1);
+    ui.set_cq_value(28.0);
+    ui.set_preset_name("NVENC".into());
+    ui.invoke_save_preset();
+    assert_eq!(ui.get_preset_index(), 2);
+    assert_eq!(ui.get_preset_names().row_count(), 3);
+
+    ui.set_korean(true);
+    ui.invoke_select_preset(1);
+    assert!(ui.get_korean());
+    assert_eq!(ui.get_encoder_index(), 0);
+    assert_eq!(ui.get_output_suffix(), "_cpu");
+    assert_eq!(ui.get_conversion_format(), 1);
+    assert_eq!(ui.get_preset_name(), "고화질");
+
+    ui.set_crf_value(22.0);
+    ui.invoke_save_preset();
+    assert_eq!(ui.get_preset_names().row_count(), 3);
+    assert_eq!(read_settings()["presets"][0]["options"]["crf"], 22.0);
+
+    ui.set_crf_value(31.0);
+    ui.invoke_save_settings();
+    assert_eq!(read_settings()["presets"].as_array().unwrap().len(), 2);
+    settings.save(ui).unwrap();
+    settings::setup(ui, path.to_owned());
+    assert_eq!(ui.get_crf_value(), 31.0);
+    assert_eq!(ui.get_preset_names().row_data(2).unwrap(), "NVENC");
+    ui.invoke_select_preset(1);
+    assert_eq!(ui.get_crf_value(), 22.0);
+    ui.invoke_select_preset(2);
+    assert_eq!(ui.get_encoder_index(), 1);
+    assert_eq!(ui.get_cq_value(), 28.0);
 }
 
 fn check_conversion_batch(ui: &MainWindow, events: &mpsc::Receiver<Event>) {
