@@ -1,5 +1,10 @@
 use super::{AnimationFormat, Cancel, ConversionJob, Resize, SOURCE_EXTENSIONS};
-use crate::{ConversionItem, MainWindow, probe::source_info, windows::TaskbarProgress};
+use crate::{
+    ConversionItem, JobStatus, LocalizedText, MainWindow,
+    language::{Language, diagnostic, message},
+    probe,
+    windows::TaskbarProgress,
+};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::{
     cell::Cell,
@@ -84,29 +89,33 @@ impl Queue {
         }
         let mut changed = false;
         for (index, mut job) in self.jobs.iter().enumerate() {
-            if job.status == "완료" {
-                job.status = "대기".into();
-                job.detail = "".into();
+            if job.status == JobStatus::Done {
+                job.status = JobStatus::Waiting;
+                job.detail = LocalizedText::default();
                 self.jobs.set_row_data(index, job);
                 changed = true;
             }
         }
         if changed {
-            ui.set_conversion_status(
-                "출력 설정이 변경되어 완료 파일을 대기 목록으로 돌렸습니다.".into(),
-            );
-            ui.set_conversion_detail("".into());
+            ui.set_conversion_status(message!(
+                "Output settings changed. Completed files were added back to the queue.",
+                "출력 설정이 변경되어 완료 파일을 대기 목록으로 돌렸습니다.",
+            ));
+            ui.set_conversion_detail(LocalizedText::default());
             ui.set_conversion_progress(0.0);
         }
     }
 
     fn add(&self, ui: &MainWindow, paths: Vec<PathBuf>) {
         if paths.is_empty() {
-            ui.set_conversion_status("추가할 동영상이나 애니메이션 파일이 없습니다.".into());
+            ui.set_conversion_status(message!(
+                "No video or animation files to add.",
+                "추가할 동영상이나 애니메이션 파일이 없습니다.",
+            ));
             return;
         }
-        ui.set_conversion_status("".into());
-        ui.set_conversion_detail("".into());
+        ui.set_conversion_status(LocalizedText::default());
+        ui.set_conversion_detail(LocalizedText::default());
         ui.set_conversion_progress(0.0);
         let ffmpeg = ui.get_ffmpeg_path().to_string();
         let mut added = Vec::new();
@@ -117,13 +126,15 @@ impl Queue {
                 id,
                 path: path.to_string_lossy().as_ref().into(),
                 source_info: if ffmpeg.is_empty() {
-                    "인코딩 탭에서 FFmpeg 경로를 설정하세요."
+                    message!(
+                        "Set the FFmpeg path on the Encode tab.",
+                        "인코딩 탭에서 FFmpeg 경로를 설정하세요."
+                    )
                 } else {
-                    "원본 정보 읽는 중…"
-                }
-                .into(),
-                status: "대기".into(),
-                detail: "".into(),
+                    probe::reading_source_info()
+                },
+                status: JobStatus::Waiting,
+                detail: LocalizedText::default(),
             });
             added.push((id, path));
         }
@@ -139,11 +150,11 @@ impl Queue {
                     if cancel.stopped() {
                         break;
                     }
-                    let info = source_info(&ffmpeg, &path, &cancel)
+                    let info = probe::source_info(&ffmpeg, &path, &cancel)
                         .await
-                        .unwrap_or_else(|_| "원본 정보를 읽을 수 없습니다.".into());
+                        .unwrap_or_else(|_| probe::missing_source_info());
                     let _ = weak.upgrade_in_event_loop(move |ui| {
-                        update_job(&ui, id, |job| job.source_info = info.into());
+                        update_job(&ui, id, |job| job.source_info = info);
                     });
                 }
             }),
@@ -155,10 +166,13 @@ impl Queue {
             return;
         }
         self.requeue_completed(ui);
-        ui.set_conversion_detail("".into());
+        ui.set_conversion_detail(LocalizedText::default());
         let ffmpeg = ui.get_ffmpeg_path().to_string();
         if ffmpeg.is_empty() {
-            ui.set_conversion_status("인코딩 탭에서 FFmpeg 경로를 설정하세요.".into());
+            ui.set_conversion_status(message!(
+                "Set the FFmpeg path on the Encode tab.",
+                "인코딩 탭에서 FFmpeg 경로를 설정하세요."
+            ));
             return;
         }
         let options = OutputOptions::read(ui);
@@ -169,7 +183,7 @@ impl Queue {
         let (format, resize) = match settings {
             Ok(settings) => settings,
             Err(error) => {
-                ui.set_conversion_status(error.to_string().into());
+                ui.set_conversion_status(diagnostic(&error));
                 return;
             }
         };
@@ -179,9 +193,9 @@ impl Queue {
             .iter()
             .filter(|job| {
                 if retry {
-                    job.status == "실패"
+                    job.status == JobStatus::Failed
                 } else {
-                    job.status == "대기" || job.status == "취소"
+                    matches!(job.status, JobStatus::Waiting | JobStatus::Cancelled)
                 }
             })
             .map(|job| {
@@ -197,20 +211,23 @@ impl Queue {
             })
             .collect();
         if jobs.is_empty() {
-            ui.set_conversion_status("실행할 변환 작업이 없습니다.".into());
+            ui.set_conversion_status(message!(
+                "No conversion jobs to run.",
+                "실행할 변환 작업이 없습니다."
+            ));
             return;
         }
         for (id, _) in &jobs {
             update_job(ui, *id, |job| {
-                job.status = "대기".into();
-                job.detail = "".into();
+                job.status = JobStatus::Waiting;
+                job.detail = LocalizedText::default();
             });
         }
         cancel.reset();
         self.completed_options.set(Some(options));
         ui.set_conversion_progress(0.0);
         ui.set_conversion_busy(true);
-        ui.set_conversion_status("변환 중…".into());
+        ui.set_conversion_status(message!("Converting…", "변환 중…"));
         let weak = ui.as_weak();
         track(
             &self.workers,
@@ -236,8 +253,12 @@ async fn run_batch(
             break;
         }
         let _ = weak.upgrade_in_event_loop(move |ui| {
-            update_job(&ui, id, |job| job.status = "진행".into());
-            ui.set_conversion_status(format!("변환 중 · {}/{total}", index + 1).into());
+            update_job(&ui, id, |job| job.status = JobStatus::Running);
+            ui.set_conversion_status(message!(
+                "Converting · {}/{total}",
+                "변환 중 · {}/{total}",
+                index + 1
+            ));
         });
         let result = job
             .run(&ffmpeg, &cancel, |progress| {
@@ -249,12 +270,15 @@ async fn run_batch(
         let (status, detail) = match result {
             Ok(path) => {
                 completed += 1;
-                ("완료", path.display().to_string())
+                (
+                    JobStatus::Done,
+                    LocalizedText::same(path.display().to_string()),
+                )
             }
-            Err(error) if cancel.stopped() => ("취소", format!("{error:#}")),
+            Err(error) if cancel.stopped() => (JobStatus::Cancelled, diagnostic(&error)),
             Err(error) => {
                 failed += 1;
-                ("실패", format!("{error:#}"))
+                (JobStatus::Failed, diagnostic(&error))
             }
         };
         processed = completed + failed;
@@ -262,8 +286,8 @@ async fn run_batch(
         taskbar.set_progress(fraction);
         let _ = weak.upgrade_in_event_loop(move |ui| {
             update_job(&ui, id, |job| {
-                job.status = status.into();
-                job.detail = detail.into();
+                job.status = status;
+                job.detail = detail;
             });
             ui.set_conversion_progress(fraction);
         });
@@ -271,14 +295,17 @@ async fn run_batch(
     taskbar.clear();
     let stopped = cancel.stopped();
     let _ = weak.upgrade_in_event_loop(move |ui| {
-        let status = if stopped {
-            "변환 중단"
+        ui.set_conversion_status(if stopped {
+            message!(
+                "Conversion stopped · {completed}/{total} completed · {failed} failed",
+                "변환 중단 · 완료 {completed}/{total} · 실패 {failed}",
+            )
         } else {
-            "변환 종료"
-        };
-        ui.set_conversion_status(
-            format!("{status} · 완료 {completed}/{total} · 실패 {failed}").into(),
-        );
+            message!(
+                "Conversion finished · {completed}/{total} completed · {failed} failed",
+                "변환 종료 · 완료 {completed}/{total} · 실패 {failed}",
+            )
+        });
         ui.set_conversion_progress(processed as f32 / total as f32);
         ui.set_conversion_busy(false);
     });
@@ -312,9 +339,13 @@ pub fn setup(
     let q = queue.clone();
     ui.on_pick_conversion_files(move || {
         if let Some(ui) = weak.upgrade().filter(|ui| !ui.get_conversion_busy()) {
+            let language = Language::current(&ui);
             if let Some(paths) = rfd::FileDialog::new()
-                .add_filter("동영상 및 애니메이션", SOURCE_EXTENSIONS)
-                .add_filter("모든 파일", &["*"])
+                .add_filter(
+                    language.select("Videos and animations", "동영상 및 애니메이션"),
+                    SOURCE_EXTENSIONS,
+                )
+                .add_filter(language.select("All files", "모든 파일"), &["*"])
                 .pick_files()
             {
                 q.add(&ui, paths);
@@ -351,7 +382,7 @@ pub fn setup(
         if let Some(ui) = weak.upgrade().filter(|ui| !ui.get_conversion_busy()) {
             if (index as usize) < q.jobs.row_count() {
                 q.jobs.remove(index as usize);
-                ui.set_conversion_detail("".into());
+                ui.set_conversion_detail(LocalizedText::default());
             }
         }
     });
@@ -374,8 +405,8 @@ pub fn setup(
     ui.on_clear_conversion_list(move || {
         if let Some(ui) = weak.upgrade().filter(|ui| !ui.get_conversion_busy()) {
             q.jobs.set_vec(Vec::new());
-            ui.set_conversion_detail("".into());
-            ui.set_conversion_status("".into());
+            ui.set_conversion_detail(LocalizedText::default());
+            ui.set_conversion_status(LocalizedText::default());
             ui.set_conversion_progress(0.0);
         }
     });

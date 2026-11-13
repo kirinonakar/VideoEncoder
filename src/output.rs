@@ -1,4 +1,5 @@
 //! Publish completed output without replacing any existing directory entry.
+use crate::language::message;
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -22,11 +23,12 @@ fn publish_no_replace(source: &Path, target: &Path) -> io::Result<()> {
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let target = fs::canonicalize(parent)?.join(
-        target
-            .file_name()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "출력 파일 이름 없음"))?,
-    );
+    let target = fs::canonicalize(parent)?.join(target.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            message!("Missing output file name", "출력 파일 이름 없음"),
+        )
+    })?);
     let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
     let target: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
     // No MOVEFILE_REPLACE_EXISTING: atomically rename on NTFS/FAT/exFAT,
@@ -94,7 +96,10 @@ impl OutputFile {
         }
         Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
-            "미완성 파일 이름을 확보할 수 없습니다",
+            message!(
+                "Could not reserve an incomplete file name",
+                "미완성 파일 이름을 확보할 수 없습니다"
+            ),
         ))
     }
 
@@ -111,7 +116,10 @@ impl OutputFile {
         }
         Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
-            "출력 파일 이름을 확보할 수 없습니다",
+            message!(
+                "Could not reserve an output file name",
+                "출력 파일 이름을 확보할 수 없습니다"
+            ),
         ))
     }
 

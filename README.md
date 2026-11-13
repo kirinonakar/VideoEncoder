@@ -81,7 +81,8 @@ Download the latest build from the [Releases Page](https://github.com/kirinonaka
 -   In **Convert**, add files or a folder to the queue, then choose **Animated GIF**, **Animated WebP**, or **Animated AVIF** for the batch. Each file shows its source resolution and playback duration under the filename.
 -   Leave both size fields blank for the original resolution. Enter one dimension in pixels to preserve the aspect ratio, or enter both for an exact size.
 -   Conversion uses the **Output Folder** from the encoding tab. A blank folder saves next to the source. Outputs use the source name with the selected extension, adding a number if the name is taken.
--   WebP output requires `libwebp_anim`, and AVIF output requires `libaom-av1` and the AVIF muxer. Animated WebP input requires an FFmpeg build with an animated WebP decoder.
+-   WebP output requires FFmpeg with `libwebp` support, and AVIF output requires `libaom-av1` and the AVIF muxer. Animated WebP input requires an FFmpeg build with an animated WebP decoder.
+-   Animated WebP uses lossy compression at quality 90. Common opaque input formats are encoded as independent frames to reduce block artifacts from reusing pixels. Output files can be larger.
 
 ## License
 

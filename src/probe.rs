@@ -1,4 +1,8 @@
-use crate::encoder::{Cancel, command};
+use crate::{
+    LocalizedText,
+    encoder::{Cancel, command},
+    language::message,
+};
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use std::{
@@ -15,6 +19,10 @@ pub struct Stream {
     #[serde(default)]
     pub codec_name: String,
     #[serde(default)]
+    pub pix_fmt: String,
+    #[serde(default)]
+    pub tags: StreamTags,
+    #[serde(default)]
     pub width: u32,
     #[serde(default)]
     pub height: u32,
@@ -28,6 +36,11 @@ pub struct Stream {
     pub disposition: Disposition,
     #[serde(default)]
     pub side_data_list: Vec<SideData>,
+}
+#[derive(Debug, Default, Deserialize)]
+pub struct StreamTags {
+    #[serde(default, alias = "ALPHA_MODE")]
+    pub alpha_mode: Option<String>,
 }
 #[derive(Debug, Deserialize)]
 pub struct SideData {
@@ -63,7 +76,10 @@ impl Media {
         self.streams
             .iter()
             .find(|s| s.codec_type == "video" && s.disposition.attached_pic == 0)
-            .context("비디오 스트림이 없습니다")
+            .context(message!(
+                "No video stream found",
+                "비디오 스트림이 없습니다"
+            ))
     }
     pub fn duration(&self) -> f32 {
         self.format
@@ -90,8 +106,10 @@ pub fn resolve_tool(ffmpeg: &str, name: &str) -> Option<PathBuf> {
 }
 
 pub async fn analyze(ffmpeg: &str, path: &Path, cancel: &Cancel) -> Result<Media> {
-    let ffprobe = resolve_tool(ffmpeg, "ffprobe")
-        .context("ffprobe를 찾을 수 없습니다. FFmpeg와 같은 폴더 또는 PATH에 설치하세요.")?;
+    let ffprobe = resolve_tool(ffmpeg, "ffprobe").context(message!(
+        "ffprobe was not found. Install it next to FFmpeg or on PATH.",
+        "ffprobe를 찾을 수 없습니다. FFmpeg와 같은 폴더 또는 PATH에 설치하세요.",
+    ))?;
     let mut cmd = command(ffprobe);
     cmd.args([
         "-v",
@@ -104,15 +122,21 @@ pub async fn analyze(ffmpeg: &str, path: &Path, cancel: &Cancel) -> Result<Media
     .arg(path)
     .stdin(Stdio::null());
     let output = tokio::select! {
-        result = cmd.output() => result.context("FFprobe 실행 실패")?,
-        _ = cancel.cancelled() => anyhow::bail!("작업 취소됨"),
+        result = cmd.output() => result.context(message!("Could not run ffprobe", "FFprobe 실행 실패"))?,
+        _ = cancel.cancelled() => anyhow::bail!(message!("Job cancelled", "작업 취소됨")),
     };
     ensure!(
         output.status.success(),
-        "FFprobe 실패: {}",
-        String::from_utf8_lossy(&output.stderr)
+        message!(
+            "ffprobe failed: {}",
+            "FFprobe 실패: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
     );
-    serde_json::from_slice(&output.stdout).context("FFprobe JSON 분석 실패")
+    serde_json::from_slice(&output.stdout).context(message!(
+        "Could not parse ffprobe JSON",
+        "FFprobe JSON 분석 실패"
+    ))
 }
 
 async fn packet_duration(ffmpeg: &str, path: &Path, stream: u32, cancel: &Cancel) -> Option<f64> {
@@ -179,7 +203,18 @@ pub fn source_duration(media: &Media, video: &Stream) -> Option<f64> {
         .find(|duration| duration.is_finite() && *duration > 0.0)
 }
 
-pub async fn source_info(ffmpeg: &str, path: &Path, cancel: &Cancel) -> Result<String> {
+pub fn reading_source_info() -> LocalizedText {
+    message!("Reading source information…", "원본 정보 읽는 중…")
+}
+
+pub fn missing_source_info() -> LocalizedText {
+    message!(
+        "Could not read source information.",
+        "원본 정보를 읽을 수 없습니다."
+    )
+}
+
+pub async fn source_info(ffmpeg: &str, path: &Path, cancel: &Cancel) -> Result<LocalizedText> {
     let media = analyze(ffmpeg, path, cancel).await?;
     let video = source_video(&media)?;
     let mut duration = source_duration(&media, video);
@@ -193,24 +228,27 @@ pub async fn source_info(ffmpeg: &str, path: &Path, cancel: &Cancel) -> Result<S
         (video.width, video.height)
     };
     let size = if width > 0 && height > 0 {
-        format!("{width} × {height} px")
+        LocalizedText::same(format!("{width} × {height} px"))
     } else {
-        "해상도 확인 불가".into()
+        message!("Unknown resolution", "해상도 확인 불가")
     };
     let time = if let Some(duration) = duration {
         let ms = (duration * 1000.0).round() as u64;
         let seconds = ms / 1000;
-        format!(
+        LocalizedText::same(format!(
             "{:02}:{:02}:{:02}.{:03}",
             seconds / 3600,
             seconds / 60 % 60,
             seconds % 60,
             ms % 1000
-        )
+        ))
     } else {
-        "길이 확인 불가".into()
+        message!("Unknown duration", "길이 확인 불가")
     };
-    Ok(format!("{size} · {time}"))
+    Ok(LocalizedText::new(
+        format!("{} · {}", size.english, time.english),
+        format!("{} · {}", size.korean, time.korean),
+    ))
 }
 
 pub async fn probe_video(ffmpeg: &str, path: &Path) -> Result<(f32, f32, f32, f32)> {
@@ -227,7 +265,10 @@ pub async fn probe_video(ffmpeg: &str, path: &Path) -> Result<(f32, f32, f32, f3
         .unwrap_or(30.0);
     ensure!(
         video.width > 0 && video.height > 0 && media.duration() > 0.0,
-        "영상 길이/해상도를 읽을 수 없습니다"
+        message!(
+            "Could not read video duration or resolution",
+            "영상 길이/해상도를 읽을 수 없습니다"
+        )
     );
     Ok((
         media.duration(),

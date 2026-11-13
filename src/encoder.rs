@@ -1,3 +1,4 @@
+use crate::language::{diagnostic, message};
 use crate::{
     output::OutputFile,
     probe::{self, Media},
@@ -148,8 +149,11 @@ pub fn map_tracks(
         {
             ensure!(
                 !mp4 || text_subtitle(&stream.codec_name),
-                "MP4에 보존할 수 없는 자막 코덱: {}. 자막 보존을 끄거나 MKV 빠른 컷을 사용하세요.",
-                stream.codec_name
+                message!(
+                    "MP4 cannot preserve the {} subtitle codec. Turn off subtitle preservation or use fast cut with MKV.",
+                    "MP4에 보존할 수 없는 자막 코덱: {}. 자막 보존을 끄거나 MKV 빠른 컷을 사용하세요.",
+                    stream.codec_name,
+                )
             );
             cmd.arg("-map").arg(format!("0:{}", stream.index));
             cmd.arg(format!("-c:s:{i}"))
@@ -168,7 +172,10 @@ pub async fn watch_progress(
     cancel: &Cancel,
     on_progress: impl Fn(Progress),
 ) -> Result<()> {
-    let mut stderr = child.stderr.take().context("FFmpeg 오류 파이프 없음")?;
+    let mut stderr = child.stderr.take().context(message!(
+        "Missing FFmpeg error pipe",
+        "FFmpeg 오류 파이프 없음"
+    ))?;
     let mut tail = VecDeque::new();
     let mut line = Vec::new();
     let mut buf = [0u8; 4096];
@@ -176,15 +183,15 @@ pub async fn watch_progress(
     let status = loop {
         tokio::select! {
             _ = cancel.cancelled() => {
-                child.kill().await.context("FFmpeg 중단 실패")?;
-                anyhow::bail!("작업 취소됨");
+                child.kill().await.context(message!("Could not stop FFmpeg", "FFmpeg 중단 실패"))?;
+                anyhow::bail!(message!("Job cancelled", "작업 취소됨"));
             }
             read = stderr.read(&mut buf) => {
                 let n = match read {
                     Ok(n) => n,
                     Err(error) => {
                         let _ = child.kill().await;
-                        return Err(error).context("FFmpeg 로그 읽기 실패");
+                        return Err(error).context(message!("Could not read the FFmpeg log", "FFmpeg 로그 읽기 실패"));
                     }
                 };
                 if n == 0 {
@@ -192,7 +199,7 @@ pub async fn watch_progress(
                         s = child.wait() => s?,
                         _ = cancel.cancelled() => {
                             child.kill().await?;
-                            anyhow::bail!("작업 취소됨");
+                            anyhow::bail!(message!("Job cancelled", "작업 취소됨"));
                         }
                     };
                 }
@@ -214,7 +221,7 @@ pub async fn watch_progress(
             }
         }
     };
-    ensure!(!cancel.stopped(), "작업 취소됨");
+    ensure!(!cancel.stopped(), message!("Job cancelled", "작업 취소됨"));
     let bytes: Vec<u8> = tail.into_iter().collect();
     ensure!(
         status.success(),
@@ -231,7 +238,7 @@ pub async fn run(
     on_progress: impl Fn(Progress),
 ) -> Result<PathBuf> {
     let media = probe::analyze(ffmpeg, &job.src, cancel).await?;
-    ensure!(!cancel.stopped(), "작업 취소됨");
+    ensure!(!cancel.stopped(), message!("Job cancelled", "작업 취소됨"));
     let mp4 = job
         .output
         .extension()
@@ -270,25 +277,38 @@ pub async fn run_to_output(
     cancel: &Cancel,
     on_progress: impl Fn(Progress),
 ) -> Result<PathBuf> {
-    ensure!(!cancel.stopped(), "작업 취소됨");
-    let output = OutputFile::reserve(path).context("출력 파일 생성 실패")?;
+    ensure!(!cancel.stopped(), message!("Job cancelled", "작업 취소됨"));
+    let output = OutputFile::reserve(path).context(message!(
+        "Could not create output file",
+        "출력 파일 생성 실패"
+    ))?;
     cmd.args(["-progress", "pipe:2"])
         .arg(&output.incomplete)
         .stderr(Stdio::piped())
         .stdout(Stdio::null())
         .stdin(Stdio::null());
     let result = async {
-        let child = cmd.spawn().context("FFmpeg 실행 실패")?;
+        let child = cmd
+            .spawn()
+            .context(message!("Could not start FFmpeg", "FFmpeg 실행 실패"))?;
         watch_progress(child, duration, cancel, on_progress).await?;
-        ensure!(!cancel.stopped(), "작업 취소됨");
-        output.finalize().context("최종 출력 저장 실패")
+        ensure!(!cancel.stopped(), message!("Job cancelled", "작업 취소됨"));
+        output.finalize().context(message!(
+            "Could not save output file",
+            "최종 출력 저장 실패"
+        ))
     }
     .await;
     if let Err(error) = &result {
         output.discard().with_context(|| {
-            format!(
-                "{error:#}\n미완성 파일 정리 실패: {}",
-                output.incomplete.display()
+            let detail = diagnostic(error);
+            let path = output.incomplete.display();
+            crate::LocalizedText::new(
+                format!(
+                    "{}\nCould not remove incomplete file: {path}",
+                    detail.english
+                ),
+                format!("{}\n미완성 파일 정리 실패: {path}", detail.korean),
             )
         })?;
     }

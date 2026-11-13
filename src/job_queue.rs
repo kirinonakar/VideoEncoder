@@ -1,6 +1,7 @@
 use crate::{
-    JobItem, MainWindow,
+    JobItem, JobStatus, LocalizedText, MainWindow,
     encoder::{self, Cancel, EncodeJob},
+    language::{Language, diagnostic, message},
     output, probe, seconds_to_hms, settings,
     windows::TaskbarProgress,
 };
@@ -38,7 +39,7 @@ impl Queue {
         ui.set_job_list(ModelRc::from(queue.jobs.clone()));
         queue
     }
-    fn push(&self, path: &Path, info: &str) -> i32 {
+    fn push(&self, path: &Path, source_info: LocalizedText) -> i32 {
         let id = self.next_id.get();
         self.next_id.set(id + 1);
         let path: SharedString = path.to_string_lossy().into_owned().into();
@@ -46,9 +47,9 @@ impl Queue {
         self.jobs.push(JobItem {
             id,
             path,
-            source_info: info.into(),
-            status: "대기".into(),
-            detail: SharedString::default(),
+            source_info,
+            status: JobStatus::Waiting,
+            detail: LocalizedText::default(),
         });
         id
     }
@@ -57,7 +58,10 @@ impl Queue {
         let ffmpeg = ui.get_ffmpeg_path().to_string();
         if ffmpeg.is_empty() {
             for path in paths {
-                self.push(&path, "FFmpeg 경로를 설정하세요.");
+                self.push(
+                    &path,
+                    message!("Set the FFmpeg path.", "FFmpeg 경로를 설정하세요."),
+                );
             }
             return;
         }
@@ -66,7 +70,7 @@ impl Queue {
         }
         let pending: Vec<_> = paths
             .into_iter()
-            .map(|path| (self.push(&path, "원본 정보 읽는 중…"), path))
+            .map(|path| (self.push(&path, probe::reading_source_info()), path))
             .collect();
         let weak = ui.as_weak();
         let cancel = self.probe_cancel.clone();
@@ -77,13 +81,13 @@ impl Queue {
                 }
                 let info = probe::source_info(&ffmpeg, &path, &cancel)
                     .await
-                    .unwrap_or_else(|_| "원본 정보를 읽을 수 없습니다.".into());
+                    .unwrap_or_else(|_| probe::missing_source_info());
                 let _ = weak.upgrade_in_event_loop(move |ui| {
                     let jobs = ui.get_job_list();
                     if let Some((index, mut job)) =
                         jobs.iter().enumerate().find(|(_, job)| job.id == id)
                     {
-                        job.source_info = info.into();
+                        job.source_info = info;
                         jobs.set_row_data(index, job);
                     }
                 });
@@ -110,9 +114,9 @@ impl Queue {
             .filter_map(|index| {
                 let job = self.jobs.row_data(index)?;
                 let selected = if retry {
-                    job.status == "실패"
+                    job.status == JobStatus::Failed
                 } else {
-                    job.status == "대기" || job.status == "취소"
+                    matches!(job.status, JobStatus::Waiting | JobStatus::Cancelled)
                 };
                 selected.then(|| (index, PathBuf::from(job.path.as_str())))
             })
@@ -120,11 +124,11 @@ impl Queue {
     }
 }
 
-fn update_job(ui: &MainWindow, index: usize, status: &str, detail: String) {
+fn update_job(ui: &MainWindow, index: usize, status: JobStatus, detail: LocalizedText) {
     let model = ui.get_job_list();
     if let Some(mut job) = model.row_data(index) {
-        job.status = status.into();
-        job.detail = detail.into();
+        job.status = status;
+        job.detail = detail;
         model.set_row_data(index, job);
     }
 }
@@ -153,19 +157,26 @@ fn start(
     }
     let ffmpeg = ui.get_ffmpeg_path().to_string();
     if ffmpeg.is_empty() {
-        ui.set_current_file_text("FFmpeg 경로를 설정하세요.".into());
+        ui.set_current_file_text(message!(
+            "Set the FFmpeg path.",
+            "FFmpeg 경로를 설정하세요."
+        ));
         return;
     }
     let suffix = ui.get_output_suffix().to_string();
     if suffix.contains(['/', '\\', ':']) {
-        ui.set_current_file_text("출력 Suffix에는 경로 문자를 사용할 수 없습니다.".into());
+        ui.set_current_file_text(message!(
+            "The output suffix cannot contain path separators or colons.",
+            "출력 Suffix에는 경로 문자를 사용할 수 없습니다.",
+        ));
         return;
     }
     let paths = queue.scheduled(retry);
     if paths.is_empty() {
-        ui.set_current_file_text(
-            "실행할 작업이 없습니다. 완료 파일은 다시 추가할 수 있습니다.".into(),
-        );
+        ui.set_current_file_text(message!(
+            "No jobs to run. You can add completed files again.",
+            "실행할 작업이 없습니다. 완료 파일은 다시 추가할 수 있습니다.",
+        ));
         return;
     }
     let options = settings::encode_options(ui);
@@ -173,9 +184,9 @@ fn start(
     ui.set_is_encoding(true);
     ui.set_overall_progress(0.0);
     ui.set_file_progress(0.0);
-    ui.set_error_details("".into());
+    ui.set_error_details(LocalizedText::default());
     for (index, _) in &paths {
-        update_job(ui, *index, "대기", String::new());
+        update_job(ui, *index, JobStatus::Waiting, LocalizedText::default());
     }
     cancel.reset();
     let weak = ui.as_weak();
@@ -199,11 +210,14 @@ fn start(
             let w = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = w.upgrade() {
-                    update_job(&ui, index, "진행", String::new());
-                    ui.set_current_file_text(
-                        format!("[{}/{}] {}", position + 1, total, name).into(),
-                    );
-                    ui.set_current_progress_text("분석 중...".into());
+                    update_job(&ui, index, JobStatus::Running, LocalizedText::default());
+                    ui.set_current_file_text(LocalizedText::same(format!(
+                        "[{}/{}] {}",
+                        position + 1,
+                        total,
+                        name
+                    )));
+                    ui.set_current_progress_text(message!("Analyzing…", "분석 중..."));
                     ui.set_file_progress(0.0);
                 }
             });
@@ -225,31 +239,34 @@ fn start(
                     let overall = (position as f32 + p.fraction) / total as f32;
                     progress_taskbar.set_progress(overall);
                     let elapsed = file_start.elapsed().as_secs_f32();
-                    let eta = if p.fraction > 0.01 {
-                        seconds_to_hms((elapsed / p.fraction - elapsed).max(0.0))
-                    } else {
-                        "계산 중".into()
-                    };
                     let w = progress_weak.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = w.upgrade() {
                             ui.set_overall_progress(overall);
                             ui.set_file_progress(p.fraction);
-                            ui.set_current_progress_text(
-                                format!("{:.1}% ({}, {})", p.fraction * 100.0, p.speed, p.bitrate)
-                                    .into(),
-                            );
-                            ui.set_current_time_text(
-                                format!("경과 {} / 남은 시간 {}", seconds_to_hms(elapsed), eta)
-                                    .into(),
-                            );
-                            ui.set_overall_time_text(
-                                format!(
-                                    "전체 경과 {}",
-                                    seconds_to_hms(batch_start.elapsed().as_secs_f32())
-                                )
-                                .into(),
-                            );
+                            ui.set_current_progress_text(LocalizedText::same(format!(
+                                "{:.1}% ({}, {})",
+                                p.fraction * 100.0,
+                                p.speed,
+                                p.bitrate
+                            )));
+                            let elapsed_text = seconds_to_hms(elapsed);
+                            let eta = if p.fraction > 0.01 {
+                                LocalizedText::same(seconds_to_hms(
+                                    (elapsed / p.fraction - elapsed).max(0.0),
+                                ))
+                            } else {
+                                message!("Calculating…", "계산 중")
+                            };
+                            ui.set_current_time_text(LocalizedText::new(
+                                format!("Elapsed {elapsed_text} / Remaining {}", eta.english),
+                                format!("경과 {elapsed_text} / 남은 시간 {}", eta.korean),
+                            ));
+                            let total_time = seconds_to_hms(batch_start.elapsed().as_secs_f32());
+                            ui.set_overall_time_text(message!(
+                                "Total elapsed {total_time}",
+                                "전체 경과 {total_time}"
+                            ));
                         }
                     });
                 },
@@ -260,16 +277,26 @@ fn start(
             let (status, detail) = match result {
                 Ok(path) => {
                     successes += 1;
-                    ("완료", path.display().to_string())
+                    (
+                        JobStatus::Done,
+                        LocalizedText::same(path.display().to_string()),
+                    )
                 }
-                Err(e) => (if stopped { "취소" } else { "실패" }, format!("{e:#}")),
+                Err(e) => (
+                    if stopped {
+                        JobStatus::Cancelled
+                    } else {
+                        JobStatus::Failed
+                    },
+                    diagnostic(&e),
+                ),
             };
             let w = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = w.upgrade() {
                     update_job(&ui, index, status, detail.clone());
-                    if status == "실패" || status == "취소" {
-                        ui.set_error_details(detail.into());
+                    if matches!(status, JobStatus::Failed | JobStatus::Cancelled) {
+                        ui.set_error_details(detail);
                     }
                 }
             });
@@ -281,17 +308,19 @@ fn start(
         let stopped = cancel.stopped();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = weak.upgrade() {
-                ui.set_current_file_text(
-                    format!(
-                        "{}: 완료 {}/{}",
-                        if stopped { "중단" } else { "처리 종료" },
-                        successes,
-                        total
+                ui.set_current_file_text(if stopped {
+                    message!(
+                        "Stopped: {successes}/{total} completed",
+                        "중단: 완료 {successes}/{total}"
                     )
-                    .into(),
-                );
-                ui.set_current_progress_text("".into());
-                ui.set_current_time_text("".into());
+                } else {
+                    message!(
+                        "Finished: {successes}/{total} completed",
+                        "처리 종료: 완료 {successes}/{total}"
+                    )
+                });
+                ui.set_current_progress_text(LocalizedText::default());
+                ui.set_current_time_text(LocalizedText::default());
                 ui.set_overall_progress(finished as f32 / total as f32);
                 ui.set_is_encoding(false);
             }
@@ -315,12 +344,16 @@ mod tests {
             workers: Arc::new(Mutex::new(Vec::new())),
         };
         for name in ["pending.mp4", "done.mp4", "failed.mp4", "cancelled.mp4"] {
-            queue.push(Path::new(name), "");
+            queue.push(Path::new(name), LocalizedText::default());
         }
-        for (index, status) in [(1, "완료"), (2, "실패"), (3, "취소")] {
+        for (index, status) in [
+            (1, JobStatus::Done),
+            (2, JobStatus::Failed),
+            (3, JobStatus::Cancelled),
+        ] {
             let mut job = queue.jobs.row_data(index).unwrap();
-            job.status = status.into();
-            job.detail = format!("{status} detail").into();
+            job.status = status;
+            job.detail = LocalizedText::same(format!("{status:?} detail"));
             queue.jobs.set_row_data(index, job);
         }
         queue.move_row(2, 1);
@@ -342,7 +375,10 @@ mod tests {
                 queue.jobs.row_data(index).unwrap().path
             );
         }
-        assert_eq!(queue.jobs.row_data(1).unwrap().detail, "실패 detail");
+        assert_eq!(
+            queue.jobs.row_data(1).unwrap().detail.english,
+            "Failed detail"
+        );
     }
 }
 
@@ -355,11 +391,14 @@ pub fn setup(
 ) {
     let weak = ui.as_weak();
     ui.on_select_ffmpeg_path(move || {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Executable", &["exe"])
-            .pick_file()
-        {
-            if let Some(ui) = weak.upgrade() {
+        if let Some(ui) = weak.upgrade() {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter(
+                    Language::current(&ui).select("Executable", "실행 파일"),
+                    &["exe"],
+                )
+                .pick_file()
+            {
                 ui.set_ffmpeg_path(path.to_string_lossy().into_owned().into());
             }
         }
@@ -397,7 +436,7 @@ pub fn setup(
             }
             if let Some(paths) = rfd::FileDialog::new()
                 .add_filter(
-                    "Video",
+                    Language::current(&ui).select("Video", "동영상"),
                     &[
                         "mp4", "mkv", "avi", "mov", "wmv", "flv", "mpg", "mpeg", "webm",
                     ],

@@ -13,6 +13,16 @@ fn check_output(result: Output) -> Output {
     result
 }
 
+fn webp_chunks(mut data: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> {
+    std::iter::from_fn(move || {
+        let header = data.get(..8)?;
+        let size = u32::from_le_bytes(header[4..].try_into().unwrap()) as usize;
+        let payload = &data[8..8 + size];
+        data = &data[8 + size + (size & 1)..];
+        Some((&header[..4], payload))
+    })
+}
+
 async fn check_frames(ffmpeg: &str, path: &Path, size: (u64, u64), count: u64) {
     let ffprobe = probe::resolve_tool(ffmpeg, "ffprobe").unwrap();
     let result = check_output(
@@ -60,7 +70,7 @@ async fn check_frames(ffmpeg: &str, path: &Path, size: (u64, u64), count: u64) {
 }
 
 #[tokio::test]
-#[ignore = "Requires FFmpeg/FFprobe with animated WebP decoding, libwebp_anim and libaom-av1"]
+#[ignore = "Requires FFmpeg/FFprobe with animated WebP decoding, libwebp and libaom-av1"]
 async fn converts_all_formats_with_resize_and_preserves_animation() {
     let ffmpeg = which::which("ffmpeg")
         .unwrap()
@@ -96,7 +106,7 @@ async fn converts_all_formats_with_resize_and_preserves_animation() {
 
     let cancel = Cancel::default();
     assert_eq!(
-        source_info(&ffmpeg, &src, &cancel).await.unwrap(),
+        source_info(&ffmpeg, &src, &cancel).await.unwrap().english,
         "160 × 120 px · 00:00:01.500"
     );
     for (format, width, height, size) in [
@@ -113,15 +123,22 @@ async fn converts_all_formats_with_resize_and_preserves_animation() {
         let path = job.run(&ffmpeg, &cancel, |_| {}).await.unwrap();
         assert_eq!(path, folder.join(format!("원본.{}", format.extension())));
         check_frames(&ffmpeg, &path, size, 12).await;
-        let info = source_info(&ffmpeg, &path, &cancel).await.unwrap();
+        let info = source_info(&ffmpeg, &path, &cancel).await.unwrap().english;
         assert!(
             info.starts_with(&format!("{} × {} px · 00:00:01.", size.0, size.1)),
             "{info}"
         );
         if matches!(format, AnimationFormat::Webp) {
             let bytes = fs::read(&path).unwrap();
-            assert!(bytes.windows(4).any(|chunk| chunk == b"VP8 "));
-            assert!(!bytes.windows(4).any(|chunk| chunk == b"VP8L"));
+            let frames: Vec<_> = webp_chunks(&bytes[12..])
+                .filter_map(|(tag, frame)| (tag == b"ANMF").then_some(frame))
+                .collect();
+            assert_eq!(frames.len(), 12);
+            for frame in frames {
+                assert_eq!(&frame[..12], &[0, 0, 0, 0, 0, 0, 78, 0, 0, 58, 0, 0]);
+                let tags: Vec<_> = webp_chunks(&frame[16..]).map(|(tag, _)| tag).collect();
+                assert_eq!(tags, [b"VP8 "]);
+            }
         }
     }
 
@@ -142,4 +159,50 @@ async fn converts_all_formats_with_resize_and_preserves_animation() {
         fs::remove_file(entry.unwrap().path()).unwrap();
     }
     fs::remove_dir(folder).unwrap();
+}
+
+#[tokio::test]
+#[ignore = "Requires FFmpeg/FFprobe with animated WebP decoding and libwebp_anim"]
+async fn webp_preserves_transparency_across_moving_frames() {
+    let ffmpeg = which::which("ffmpeg")
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let scratch = crate::encoder::integration_tests::TestDir::new();
+    let source = scratch.0.join("alpha.mkv");
+    check_output(
+        encoder::command(&ffmpeg)
+            .args(["-v", "error", "-f", "lavfi", "-i",
+                "nullsrc=size=65x47:rate=10:duration=0.5,format=gbrap,geq=r=240:g=60:b=30:a='if(between(X,8+8*N,15+8*N)*between(Y,10,30),255,0)'",
+                "-c:v", "ffv1"])
+            .arg(&source)
+            .output()
+            .await
+            .unwrap(),
+    );
+    let output = ConversionJob {
+        source: source.clone(),
+        output_folder: PathBuf::new(),
+        format: AnimationFormat::Webp,
+        resize: Resize::parse("", "").unwrap(),
+    }
+    .run(&ffmpeg, &Cancel::default(), |_| {})
+    .await
+    .unwrap();
+
+    let mut alpha_planes = Vec::new();
+    for path in [source, output] {
+        let decoded = check_output(
+            encoder::command(&ffmpeg)
+                .args(["-v", "error", "-i"])
+                .arg(path)
+                .args(["-vf", "alphaextract", "-f", "rawvideo", "-"])
+                .output()
+                .await
+                .unwrap(),
+        );
+        assert_eq!(decoded.stdout.len(), 65 * 47 * 5);
+        alpha_planes.push(decoded.stdout);
+    }
+    assert!(alpha_planes[0] == alpha_planes[1], "decoded alpha changed");
 }

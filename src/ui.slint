@@ -1,3 +1,4 @@
+import { AppLanguage, JobStatus, LocalizedText, LanguageComboBox } from "language.slint";
 import { Button, ComboBox, LineEdit, Slider, HorizontalBox, VerticalBox, ProgressIndicator, ScrollView, CheckBox, TabWidget, Palette } from "std-widgets.slint";
 import { AppTheme } from "theme.slint";
 import { EditorTimeline } from "editor-timeline.slint";
@@ -172,7 +173,9 @@ component VideoFileComboBox {
     }
 }
 
-export struct JobItem { id: int, path: string, source-info: string, status: string, detail: string }
+export { JobStatus, LocalizedText }
+
+export struct JobItem { id: int, path: string, source-info: LocalizedText, status: JobStatus, detail: LocalizedText }
 
 export component MainWindow inherits Window {
     title: "VideoEncoder FFmpeg Wrapper";
@@ -181,6 +184,7 @@ export component MainWindow inherits Window {
     min-width: 760px;
     min-height: 720px;
     background: AppTheme.background;
+    in-out property <bool> korean <=> AppLanguage.korean;
     in-out property <bool> dark-mode <=> AppTheme.dark-mode;
     out property <color> titlebar-background: AppTheme.background;
     out property <color> titlebar-foreground: AppTheme.text;
@@ -209,7 +213,7 @@ export component MainWindow inherits Window {
     callback import-preset();
     callback cancel-edit();
     in-out property <[JobItem]> job-list;
-    in-out property <string> error-details;
+    in-out property <LocalizedText> error-details;
     in-out property <bool> all-audio: true;
     in-out property <bool> preserve-subtitles: false;
     in-out property <int> cut-mode: 0;
@@ -242,10 +246,10 @@ export component MainWindow inherits Window {
     in-out property <[string]> file-list: [];
     in-out property <float> overall-progress: 0.0;
     in-out property <float> file-progress: 0.0;
-    in-out property <string> overall-time-text: "";
-    in-out property <string> current_file_text: "";
-    in-out property <string> current_progress_text: "";
-    in-out property <string> current_time_text: "";
+    in-out property <LocalizedText> overall-time-text;
+    in-out property <LocalizedText> current_file_text;
+    in-out property <LocalizedText> current_progress_text;
+    in-out property <LocalizedText> current_time_text;
     in-out property <bool> is-encoding: false;
 
     // --- Video editor properties ---
@@ -267,12 +271,12 @@ export component MainWindow inherits Window {
     in-out property <bool> playback-limited: false;
     in-out property <bool> edit-busy: false;
     in-out property <float> edit-progress: 0.0;
-    in-out property <string> edit-status-text: "";
+    in-out property <LocalizedText> edit-status-text;
     in-out property <string> time-preview-text: "";
     in-out property <string> time-start-text: "";
     in-out property <string> time-end-text: "";
-    in-out property <string> crop-info-text: "";
-    in-out property <string> video-info-text: "";
+    in-out property <LocalizedText> crop-info-text;
+    in-out property <LocalizedText> video-info-text;
     in-out property <int> selected-index: 0;
 
     callback pick-conversion-files();
@@ -293,8 +297,8 @@ export component MainWindow inherits Window {
     in-out property <string> conversion-height;
     in-out property <bool> conversion-busy;
     in-out property <float> conversion-progress;
-    in-out property <string> conversion-status;
-    in-out property <string> conversion-detail;
+    in-out property <LocalizedText> conversion-status;
+    in-out property <LocalizedText> conversion-detail;
 
     changed conversion-format => { conversion-options-changed(); }
     changed conversion-width => { conversion-options-changed(); }
@@ -304,13 +308,13 @@ export component MainWindow inherits Window {
         padding: 16px;
         spacing: 12px;
 
-        // Keep the title centered and put the theme toggle at the far right.
+        // Keep the title centered with both toggles at the far right.
         Rectangle {
             height: 36px;
             vertical-stretch: 0;
             Text {
-                x: theme-toggle.width;
-                width: parent.width - 2 * theme-toggle.width;
+                x: theme-toggle.width + language-toggle.width + 6px;
+                width: parent.width - 2 * self.x;
                 height: 100%;
                 text: "VideoEncoder FFmpeg Wrapper";
                 font-size: 20px;
@@ -319,11 +323,19 @@ export component MainWindow inherits Window {
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
+            language-toggle := Button {
+                x: theme-toggle.x - self.width - 6px;
+                width: 44px;
+                height: 36px;
+                text: root.korean ? "KO" : "EN";
+                accessible-label: root.korean ? "영어로 전환 (EN)" : "Switch to Korean (KO)";
+                clicked => { root.korean = !root.korean; }
+            }
             theme-toggle := Button {
                 x: parent.width - self.width;
                 width: 44px;
                 height: 36px;
-                accessible-label: root.dark-mode ? "라이트 모드로 전환" : "다크 모드로 전환";
+                accessible-label: root.dark-mode ? AppLanguage.tr("Switch to light mode", "라이트 모드로 전환") : AppLanguage.tr("Switch to dark mode", "다크 모드로 전환");
                 icon: root.dark-mode ? @image-url("icons/sun.svg") : @image-url("icons/moon.svg");
                 icon-size: 18px;
                 colorize-icon: true;
@@ -337,7 +349,7 @@ export component MainWindow inherits Window {
             current-index <=> root.active-tab;
 
             Tab {
-                title: "인코딩";
+                title: AppLanguage.tr("Encode", "인코딩");
 
                 VerticalBox {
                     padding: 10px;
@@ -357,18 +369,18 @@ export component MainWindow inherits Window {
 
                 HorizontalLayout {
                     spacing: 12px;
-                    Text { text: "FFmpeg 경로:"; color: AppTheme.text; vertical-alignment: center; width: 100px; font-weight: 500; }
+                    Text { text: AppLanguage.tr("FFmpeg path:", "FFmpeg 경로:"); color: AppTheme.text; vertical-alignment: center; width: 100px; font-weight: 500; }
                     LineEdit {
                         text <=> ffmpeg-path;
-                        placeholder-text: "ffmpeg.exe 경로를 지정하세요";
+                        placeholder-text: AppLanguage.tr("Select ffmpeg.exe", "ffmpeg.exe 경로를 지정하세요");
                     }
                     Button {
-                        text: "자동선택";
+                        text: AppLanguage.tr("Auto-detect", "자동선택");
                         enabled: !is-encoding && !edit-busy;
                         clicked => { refresh-ffmpeg-path(); }
                     }
                     Button {
-                        text: "찾아보기";
+                        text: AppLanguage.tr("Browse", "찾아보기");
                         primary: false;
                         clicked => { select-ffmpeg-path(); }
                     }
@@ -376,7 +388,7 @@ export component MainWindow inherits Window {
 
                 HorizontalLayout {
                     spacing: 12px;
-                    Text { text: "출력 Suffix:"; color: AppTheme.text; vertical-alignment: center; width: 100px; font-weight: 500;}
+                    Text { text: AppLanguage.tr("Output suffix:", "출력 Suffix:"); color: AppTheme.text; vertical-alignment: center; width: 100px; font-weight: 500;}
                     LineEdit {
                         text <=> output-suffix;
                     }
@@ -384,7 +396,7 @@ export component MainWindow inherits Window {
 
                 HorizontalLayout {
                     spacing: 12px;
-                    Text { text: "인코더:"; color: AppTheme.text; vertical-alignment: center; width: 100px; font-weight: 500; }
+                    Text { text: AppLanguage.tr("Encoder:", "인코더:"); color: AppTheme.text; vertical-alignment: center; width: 100px; font-weight: 500; }
                     ComboBox {
                         model: ["x265 (CPU)", "NVENC (H.265)"];
                         current-index <=> encoder-index;
@@ -396,8 +408,8 @@ export component MainWindow inherits Window {
                     VerticalLayout {
                         width: 100px;
                         alignment: center;
-                        Text { text: encoder-index == 0 ? "화질 (CRF):" : "화질 (CQ):"; color: AppTheme.text; font-weight: 500; }
-                        Text { text: "(Lower is better)"; color: AppTheme.muted; font-size: 10px; }
+                        Text { text: encoder-index == 0 ? AppLanguage.tr("Quality (CRF):", "화질 (CRF):") : AppLanguage.tr("Quality (CQ):", "화질 (CQ):"); color: AppTheme.text; font-weight: 500; }
+                        Text { text: AppLanguage.tr("(Lower is better)", "(낮을수록 고화질)"); color: AppTheme.muted; font-size: 10px; }
                     }
                     if (encoder-index == 0) : Slider {
                         minimum: 0;
@@ -415,13 +427,13 @@ export component MainWindow inherits Window {
 
                 HorizontalLayout {
                     spacing: 12px;
-                    Text { text: "출력 폴더:"; color: AppTheme.text; vertical-alignment: center; width: 100px; font-weight: 500; }
+                    Text { text: AppLanguage.tr("Output folder:", "출력 폴더:"); color: AppTheme.text; vertical-alignment: center; width: 100px; font-weight: 500; }
                     LineEdit {
                         text <=> output-folder;
-                        placeholder-text: "기본값: 원본과 동일";
+                        placeholder-text: AppLanguage.tr("Same as source by default", "기본값: 원본과 동일");
                     }
                     Button {
-                        text: "선택";
+                        text: AppLanguage.tr("Choose", "선택");
                         primary: false;
                         clicked => { select-output-folder(); }
                     }
@@ -429,21 +441,21 @@ export component MainWindow inherits Window {
 
                 HorizontalLayout {
                     spacing: 12px;
-                    CheckBox { text: "모든 오디오 트랙"; checked <=> all-audio; enabled: !is-encoding && !edit-busy; }
-                    CheckBox { text: "자막 보존"; checked <=> preserve-subtitles; enabled: !is-encoding && !edit-busy; }
-                    Text { text: "MP4: 비호환 오디오는 AAC / 텍스트 자막은 mov_text"; color: AppTheme.muted; font-size: 11px; vertical-alignment: center; }
+                    CheckBox { text: AppLanguage.tr("All audio tracks", "모든 오디오 트랙"); checked <=> all-audio; enabled: !is-encoding && !edit-busy; }
+                    CheckBox { text: AppLanguage.tr("Keep subtitles", "자막 보존"); checked <=> preserve-subtitles; enabled: !is-encoding && !edit-busy; }
+                    Text { text: AppLanguage.tr("MP4: Incompatible audio → AAC / text subtitles → mov_text", "MP4: 비호환 오디오는 AAC / 텍스트 자막은 mov_text"); color: AppTheme.muted; font-size: 11px; vertical-alignment: center; }
                 }
 
                 HorizontalLayout {
                     alignment: start;
                     Button {
                         enabled: !is-encoding && !edit-busy;
-                        text: "옵션 초기화";
+                        text: AppLanguage.tr("Reset options", "옵션 초기화");
                         clicked => { reset-options(); }
                     }
-                    Button { text: "설정 저장"; clicked => { save-settings(); } }
-                    Button { text: "프리셋 저장"; clicked => { export-preset(); } }
-                    Button { text: "프리셋 열기"; enabled: !is-encoding && !edit-busy; clicked => { import-preset(); } }
+                    Button { text: AppLanguage.tr("Save settings", "설정 저장"); clicked => { save-settings(); } }
+                    Button { text: AppLanguage.tr("Save preset", "프리셋 저장"); clicked => { export-preset(); } }
+                    Button { text: AppLanguage.tr("Load preset", "프리셋 열기"); enabled: !is-encoding && !edit-busy; clicked => { import-preset(); } }
                 }
             }
         }
@@ -463,13 +475,13 @@ export component MainWindow inherits Window {
                 HorizontalLayout {
                     vertical-stretch: 0;
                     spacing: 8px;
-                    Text { text: "인코딩 대기 목록 (" + file-list.length + ")"; color: AppTheme.text; font-weight: 600; font-size: 16px; vertical-alignment: center; }
+                    Text { text: AppLanguage.tr("Encoding queue (", "인코딩 대기 목록 (") + file-list.length + ")"; color: AppTheme.text; font-weight: 600; font-size: 16px; vertical-alignment: center; }
                     Rectangle {} // Spacer
                     HorizontalLayout {
                         spacing: 8px;
-                        Button { enabled: !is-encoding; text: "파일 추가"; clicked => { pick-files(); } }
-                        Button { enabled: !is-encoding; text: "폴더 추가"; clicked => { pick-folder(); } }
-                        Button { enabled: !is-encoding; text: "목록 비우기"; clicked => { clear-list(); } }
+                        Button { enabled: !is-encoding; text: AppLanguage.tr("Add files", "파일 추가"); clicked => { pick-files(); } }
+                        Button { enabled: !is-encoding; text: AppLanguage.tr("Add folder", "폴더 추가"); clicked => { pick-folder(); } }
+                        Button { enabled: !is-encoding; text: AppLanguage.tr("Clear queue", "목록 비우기"); clicked => { clear-list(); } }
                     }
                 }
                 
@@ -483,7 +495,7 @@ export component MainWindow inherits Window {
                     border-color: AppTheme.separator;
                     
                     if (file-list.length == 0) : Text {
-                        text: "파일이나 폴더를 드래그해서 추가하세요";
+                        text: AppLanguage.tr("Drag files or folders here", "파일이나 폴더를 드래그해서 추가하세요");
                         color: AppTheme.muted;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -494,14 +506,14 @@ export component MainWindow inherits Window {
                             alignment: start;
                             for job[index] in job-list : HorizontalLayout {
                                 spacing: 6px;
-                                Text { text: job.status; color: job.status == "실패" ? #d33f49 : AppTheme.accent; width: 36px; vertical-alignment: center; font-family: "Noto Sans CJK JP"; }
+                                Text { text: AppLanguage.job-status(job.status); color: job.status == JobStatus.Failed ? #d33f49 : AppTheme.accent; width: 66px; vertical-alignment: center; font-family: "Noto Sans CJK JP"; }
                                 QueueSource {
                                     path: job.path;
                                     info: job.source-info;
                                 }
                                 Button { text: "↑"; width: 32px; enabled: !is-encoding && index > 0; clicked => { move-job(index, -1); } }
                                 Button { text: "↓"; width: 32px; enabled: !is-encoding && index + 1 < job-list.length; clicked => { move-job(index, 1); } }
-                                Button { text: "제거"; enabled: !is-encoding; clicked => { remove-job(index); } }
+                                Button { text: AppLanguage.tr("Remove", "제거"); enabled: !is-encoding; clicked => { remove-job(index); } }
                             }
                         }
                     }
@@ -521,9 +533,9 @@ export component MainWindow inherits Window {
                 spacing: 4px;
                 HorizontalBox {
                     padding: 0;
-                    Text { text: "전체 진행도"; color: AppTheme.text; font-weight: 600; font-size: 14px; font-family: "Segoe UI"; }
+                    Text { text: AppLanguage.tr("Overall progress", "전체 진행도"); color: AppTheme.text; font-weight: 600; font-size: 14px; font-family: "Segoe UI"; }
                     Rectangle {} // Spacer
-                    Text { text: overall-time-text; color: AppTheme.muted; font-size: 13px; vertical-alignment: bottom; font-family: "Segoe UI"; }
+                    Text { text: AppLanguage.text(overall-time-text); color: AppTheme.muted; font-size: 13px; vertical-alignment: bottom; font-family: "Segoe UI"; }
                 }
                 ProgressIndicator {
                     progress: overall-progress;
@@ -536,11 +548,11 @@ export component MainWindow inherits Window {
             // Current File Section
             VerticalLayout {
                 spacing: 2px;
-                Text { text: "현재 파일 진행"; color: AppTheme.text; font-weight: 500; font-size: 13px; font-family: "Segoe UI"; }
+                Text { text: AppLanguage.tr("Current file progress", "현재 파일 진행"); color: AppTheme.text; font-weight: 500; font-size: 13px; font-family: "Segoe UI"; }
                 
                 // Filename (First line)
                 Text {
-                    text: current_file_text;
+                    text: AppLanguage.text(current_file_text);
                     color: AppTheme.text;
                     font-size: 13px;
                     wrap: word-wrap;
@@ -550,7 +562,7 @@ export component MainWindow inherits Window {
                 }
                 // Progress details (Second line)
                 Text {
-                    text: current_progress_text;
+                    text: AppLanguage.text(current_progress_text);
                     color: AppTheme.text;
                     font-size: 13px;
                     height: 20px;
@@ -558,7 +570,7 @@ export component MainWindow inherits Window {
                 }
                 // Time info (Third line)
                 Text {
-                    text: current_time_text;
+                    text: AppLanguage.text(current_time_text);
                     color: AppTheme.muted;
                     font-size: 13px;
                     height: 20px;
@@ -579,7 +591,7 @@ export component MainWindow inherits Window {
             alignment: center;
             
             Button {
-                text: "변환 시작";
+                text: AppLanguage.tr("Start encoding", "인코딩 시작");
                 primary: true;
                 enabled: !is-encoding && !edit-busy && !conversion-busy && file-list.length > 0;
                 clicked => { start-encoding(); }
@@ -588,19 +600,19 @@ export component MainWindow inherits Window {
             }
             
             Button {
-                text: "중단";
+                text: AppLanguage.tr("Stop", "중단");
                 enabled: is-encoding;
                 clicked => { stop-encoding(); }
                 height: 36px;
                 width: 120px;
             }
-            Button { text: "실패만 재시도"; enabled: !is-encoding && !edit-busy && !conversion-busy; clicked => { retry-failed(); } }
+            Button { text: AppLanguage.tr("Retry failed", "실패만 재시도"); enabled: !is-encoding && !edit-busy && !conversion-busy; clicked => { retry-failed(); } }
         }
                 }
             }
 
             Tab {
-                title: "잘라내기 / 크롭";
+                title: AppLanguage.tr("Trim / Crop", "잘라내기 / 크롭");
 
                 VerticalBox {
                     padding: 10px;
@@ -609,18 +621,18 @@ export component MainWindow inherits Window {
                     // Video source row
                     HorizontalLayout {
                         spacing: 8px;
-                        Text { text: "비디오:"; color: AppTheme.text; width: 60px; vertical-alignment: center; font-weight: 500; }
+                        Text { text: AppLanguage.tr("Video:", "비디오:"); color: AppTheme.text; width: 60px; vertical-alignment: center; font-weight: 500; }
                         VideoFileComboBox {
                             model: file-list;
                             current-index <=> selected-index;
                             selected => { open-video(); }
                         }
-                        Button { text: "열기"; clicked => { open-video(); } }
-                        Button { enabled: !is-encoding && !edit-busy; text: "파일 선택..."; clicked => { pick-video(); } }
+                        Button { text: AppLanguage.tr("Open", "열기"); clicked => { open-video(); } }
+                        Button { enabled: !is-encoding && !edit-busy; text: AppLanguage.tr("Choose file…", "파일 선택..."); clicked => { pick-video(); } }
                     }
 
                     Text {
-                        text: video-info-text;
+                        text: AppLanguage.text(video-info-text);
                         color: AppTheme.muted;
                         font-size: 12px;
                         wrap: word-wrap;
@@ -639,7 +651,7 @@ export component MainWindow inherits Window {
                         property <length> disp-h: min(area-h, area-w * (max(1.0, video-height) / max(1.0, video-width)));
 
                         if (!video-loaded) : Text {
-                            text: "비디오를 선택하면 여기에 미리보기가 표시됩니다";
+                            text: AppLanguage.tr("Select a video to see its preview here", "비디오를 선택하면 여기에 미리보기가 표시됩니다");
                             color: #a4adbb;
                             font-size: 13px;
                             horizontal-alignment: center;
@@ -855,15 +867,15 @@ export component MainWindow inherits Window {
                         seek(time) => { seek-time(time); }
                     }
 
-                    Text { text: crop-info-text; color: AppTheme.muted; font-size: 12px; }
+                    Text { text: AppLanguage.text(crop-info-text); color: AppTheme.muted; font-size: 12px; }
 
                     // Marker & play buttons
                     HorizontalLayout {
                         spacing: 8px;
-                        Button { text: "시작점 설정"; enabled: video-loaded && !edit-busy; clicked => { mark-trim-start(); } }
-                        Button { text: "끝점 설정"; enabled: video-loaded && !edit-busy; clicked => { mark-trim-end(); } }
+                        Button { text: AppLanguage.tr("Set start", "시작점 설정"); enabled: video-loaded && !edit-busy; clicked => { mark-trim-start(); } }
+                        Button { text: AppLanguage.tr("Set end", "끝점 설정"); enabled: video-loaded && !edit-busy; clicked => { mark-trim-end(); } }
                         Button {
-                            text: "재생 제한";
+                            text: AppLanguage.tr("Limit playback", "재생 제한");
                             checkable: true;
                             checked <=> playback-limited;
                             enabled: video-loaded && !edit-busy;
@@ -875,7 +887,7 @@ export component MainWindow inherits Window {
                             icon: @image-url("icons/rewind.svg");
                             icon-size: 22px;
                             colorize-icon: true;
-                            accessible-label: playback-limited ? "시작점으로 되감기" : "처음으로 되감기";
+                            accessible-label: playback-limited ? AppLanguage.tr("Rewind to start marker", "시작점으로 되감기") : AppLanguage.tr("Rewind to beginning", "처음으로 되감기");
                             enabled: video-loaded && !edit-busy;
                             clicked => { rewind(); }
                         }
@@ -886,32 +898,37 @@ export component MainWindow inherits Window {
                             icon: is-playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg");
                             icon-size: 22px;
                             colorize-icon: true;
-                            accessible-label: is-playing ? "일시정지" : "재생";
+                            accessible-label: is-playing ? AppLanguage.tr("Pause", "일시정지") : AppLanguage.tr("Play", "재생");
                             enabled: video-loaded && !edit-busy;
                             clicked => { toggle-play(); }
                         }
-                        Button { text: "편집 초기화"; enabled: video-loaded && !edit-busy; clicked => { reset-edit(); } }
+                        Button { text: AppLanguage.tr("Reset edits", "편집 초기화"); enabled: video-loaded && !edit-busy; clicked => { reset-edit(); } }
                     }
 
                     HorizontalLayout {
                         spacing: 8px;
-                        Text { text: "컷 모드:"; color: AppTheme.text; vertical-alignment: center; }
-                        ComboBox { model: ["빠른 컷 (스트림 복사)", "정확한 컷 (재인코딩)"]; current-index <=> cut-mode; enabled: !edit-busy && !is-encoding; }
-                        Text { text: "모든 오디오/자막 옵션은 인코딩 탭에서 설정"; color: AppTheme.muted; font-size: 11px; vertical-alignment: center; }
+                        Text { text: AppLanguage.tr("Cut mode:", "컷 모드:"); color: AppTheme.text; vertical-alignment: center; }
+                        LanguageComboBox {
+                            english: ["Fast cut (stream copy)", "Exact cut (re-encode)"];
+                            korean: ["빠른 컷 (스트림 복사)", "정확한 컷 (재인코딩)"];
+                            current-index <=> cut-mode;
+                            enabled: !edit-busy && !is-encoding;
+                        }
+                        Text { text: AppLanguage.tr("Set audio and subtitle options on the Encode tab", "모든 오디오/자막 옵션은 인코딩 탭에서 설정"); color: AppTheme.muted; font-size: 11px; vertical-alignment: center; }
                     }
-                    Text { text: cut-mode == 0 ? "빠른 컷: 영상 화질 손실 없음 · 시작점에 키프레임 오차 가능" : "정확한 컷: 선택 시작점을 프레임 경계로 맞춰 HEVC/AAC 재인코딩 · MP4 출력"; color: AppTheme.muted; font-size: 12px; wrap: word-wrap; }
-                    Text { text: "편집 실행: 크롭 영역과 선택 구간을 자동 적용합니다. 크롭 시 재인코딩됩니다."; color: AppTheme.muted; font-size: 12px; wrap: word-wrap; }
+                    Text { text: cut-mode == 0 ? AppLanguage.tr("Fast cut preserves video quality. The start may shift to a keyframe.", "빠른 컷: 영상 화질 손실 없음 · 시작점에 키프레임 오차 가능") : AppLanguage.tr("Exact cut aligns the start to a frame boundary and re-encodes to HEVC/AAC in MP4.", "정확한 컷: 선택 시작점을 프레임 경계로 맞춰 HEVC/AAC 재인코딩 · MP4 출력"); color: AppTheme.muted; font-size: 12px; wrap: word-wrap; }
+                    Text { text: AppLanguage.tr("Apply edits uses the crop and trim selection. Cropping re-encodes the video.", "편집 실행: 크롭 영역과 선택 구간을 자동 적용합니다. 크롭 시 재인코딩됩니다."); color: AppTheme.muted; font-size: 12px; wrap: word-wrap; }
 
                     // Action buttons
                     HorizontalLayout {
                         spacing: 8px;
                         Button {
-                            text: "편집 실행";
+                            text: AppLanguage.tr("Apply edits", "편집 실행");
                             primary: true;
                             enabled: video-loaded && !edit-busy && !is-encoding && !conversion-busy && (trim-end - trim-start) > 0.05;
                             clicked => { run-edit(); }
                         }
-                        Button { text: "편집 작업 취소"; enabled: edit-busy; clicked => { cancel-edit(); } }
+                        Button { text: AppLanguage.tr("Cancel edit", "편집 작업 취소"); enabled: edit-busy; clicked => { cancel-edit(); } }
                     }
 
                     ProgressIndicator {
@@ -920,7 +937,7 @@ export component MainWindow inherits Window {
                     }
 
                     Text {
-                        text: edit-status-text;
+                        text: AppLanguage.text(edit-status-text);
                         wrap: word-wrap;
                         color: AppTheme.text;
                         font-size: 12px;
@@ -929,7 +946,7 @@ export component MainWindow inherits Window {
             }
 
             Tab {
-                title: "변환";
+                title: AppLanguage.tr("Convert", "변환");
 
                 ConversionTab {
                     jobs: root.conversion-jobs;

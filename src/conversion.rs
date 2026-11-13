@@ -1,5 +1,6 @@
 use crate::{
     encoder::{self, Cancel, Progress},
+    language::message,
     output, probe,
 };
 use anyhow::{Context, Result};
@@ -23,7 +24,10 @@ impl AnimationFormat {
             0 => Ok(Self::Gif),
             1 => Ok(Self::Webp),
             2 => Ok(Self::Avif),
-            _ => anyhow::bail!("출력 형식을 선택하세요."),
+            _ => anyhow::bail!(message!(
+                "Choose an output format.",
+                "출력 형식을 선택하세요."
+            )),
         }
     }
 
@@ -44,7 +48,7 @@ struct Resize {
 
 impl Resize {
     fn parse(width: &str, height: &str) -> Result<Self> {
-        fn dimension(value: &str, label: &str) -> Result<Option<i32>> {
+        fn dimension(value: &str, error: crate::LocalizedText) -> Result<Option<i32>> {
             let value = value.trim();
             if value.is_empty() {
                 return Ok(None);
@@ -53,12 +57,24 @@ impl Resize {
                 .parse::<i32>()
                 .ok()
                 .filter(|size| *size > 0)
-                .with_context(|| format!("{label} 크기는 1 이상의 정수로 입력하세요."))?;
+                .context(error)?;
             Ok(Some(size))
         }
         Ok(Self {
-            width: dimension(width, "가로")?,
-            height: dimension(height, "세로")?,
+            width: dimension(
+                width,
+                message!(
+                    "Width must be a positive integer.",
+                    "가로 크기는 1 이상의 정수로 입력하세요."
+                ),
+            )?,
+            height: dimension(
+                height,
+                message!(
+                    "Height must be a positive integer.",
+                    "세로 크기는 1 이상의 정수로 입력하세요."
+                ),
+            )?,
         })
     }
 
@@ -127,11 +143,11 @@ impl ConversionJob {
             AnimationFormat::Gif => cmd.args(["-c:v", "gif"]),
             AnimationFormat::Webp => cmd.args([
                 "-c:v",
-                "libwebp_anim",
+                webp_encoder(video),
                 "-lossless",
                 "0",
                 "-quality",
-                "95",
+                "90",
                 "-compression_level",
                 "4",
                 "-pix_fmt",
@@ -154,6 +170,40 @@ impl ConversionJob {
         cmd.args(["-loop", "0", "-f", self.format.extension()]);
         let duration = probe::source_duration(&media, video).unwrap_or_default() as f32;
         encoder::run_to_output(cmd, &self.output_path(), duration, cancel, on_progress).await
+    }
+}
+
+fn webp_encoder(video: &probe::Stream) -> &'static str {
+    // For known opaque formats, let the WebP muxer assemble independent frames.
+    // Alpha inputs need the animation encoder's frame replacement/blending flags.
+    let opaque = matches!(
+        video.pix_fmt.as_str(),
+        "yuv420p"
+            | "yuv422p"
+            | "yuv444p"
+            | "yuvj420p"
+            | "yuvj422p"
+            | "yuvj444p"
+            | "yuv420p10le"
+            | "yuv422p10le"
+            | "yuv444p10le"
+            | "nv12"
+            | "p010le"
+            | "gray"
+            | "rgb24"
+            | "bgr24"
+            | "gbrp"
+    );
+    if opaque
+        && video
+            .tags
+            .alpha_mode
+            .as_deref()
+            .is_none_or(|mode| mode == "0")
+    {
+        "libwebp"
+    } else {
+        "libwebp_anim"
     }
 }
 

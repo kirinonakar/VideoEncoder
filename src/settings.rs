@@ -1,6 +1,7 @@
 use crate::{
     MainWindow,
     encoder::{EncodeOptions, Tracks},
+    language::{Language, diagnostic, message},
 };
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,8 @@ pub struct Settings {
     subtitles: bool,
     exact_cut: bool,
     dark: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    language: Option<Language>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -34,6 +37,7 @@ impl Default for Settings {
             subtitles: false,
             exact_cut: false,
             dark: false,
+            language: None,
         }
     }
 }
@@ -52,7 +56,10 @@ pub fn settings_path() -> PathBuf {
 }
 impl Settings {
     pub fn read(path: &Path) -> Result<Self> {
-        serde_json::from_slice(&std::fs::read(path)?).context("설정 JSON 읽기 실패")
+        serde_json::from_slice(&std::fs::read(path)?).context(message!(
+            "Could not read settings JSON",
+            "설정 JSON 읽기 실패"
+        ))
     }
     pub fn capture(ui: &MainWindow) -> Self {
         Self {
@@ -66,6 +73,7 @@ impl Settings {
             subtitles: ui.get_preserve_subtitles(),
             exact_cut: ui.get_cut_mode() == 1,
             dark: ui.get_dark_mode(),
+            language: Some(Language::current(ui)),
         }
     }
     pub fn apply(&self, ui: &MainWindow) {
@@ -94,7 +102,10 @@ impl Settings {
         }
         let temp = path.with_extension("json.tmp");
         std::fs::write(&temp, serde_json::to_vec_pretty(self)?)?;
-        std::fs::rename(temp, path).context("설정 파일 저장 실패")
+        std::fs::rename(temp, path).context(message!(
+            "Could not write settings file",
+            "설정 파일 저장 실패"
+        ))
     }
 }
 pub fn tracks(ui: &MainWindow) -> Tracks {
@@ -127,11 +138,19 @@ fn discover_ffmpeg() -> Option<PathBuf> {
         .filter(|p| p.is_file())
         .or_else(|| which::which(name).ok())
 }
-pub fn setup(ui: &MainWindow) {
-    match Settings::read(&settings_path()) {
-        Ok(settings) => settings.apply(ui),
-        Err(e) if settings_path().exists() => {
-            ui.set_current_file_text(format!("설정 불러오기 실패: {e:#}").into())
+pub fn setup(ui: &MainWindow, path: PathBuf) {
+    ui.set_korean(Language::system() == Language::Ko);
+    match Settings::read(&path) {
+        Ok(settings) => {
+            settings.apply(ui);
+            if let Some(language) = settings.language {
+                ui.set_korean(language == Language::Ko);
+            }
+        }
+        Err(e) if path.exists() => {
+            ui.set_current_file_text(diagnostic(
+                &e.context(message!("Could not load settings", "설정 불러오기 실패")),
+            ));
         }
         _ => Settings::default().apply(ui),
     }
@@ -149,25 +168,28 @@ pub fn setup(ui: &MainWindow) {
             match discover_ffmpeg() {
                 Some(path) => {
                     ui.set_ffmpeg_path(path.to_string_lossy().into_owned().into());
-                    ui.set_current_file_text("FFmpeg 경로를 자동 선택했습니다.".into());
+                    ui.set_current_file_text(message!(
+                        "FFmpeg path selected automatically.",
+                        "FFmpeg 경로를 자동 선택했습니다."
+                    ));
                 }
-                None => ui.set_current_file_text(
-                    "FFmpeg를 찾지 못했습니다. 프로그램 폴더 또는 PATH를 확인하세요.".into(),
-                ),
+                None => ui.set_current_file_text(message!(
+                    "FFmpeg was not found. Check the application folder or PATH.",
+                    "FFmpeg를 찾지 못했습니다. 프로그램 폴더 또는 PATH를 확인하세요.",
+                )),
             }
         }
     });
     let weak = ui.as_weak();
     ui.on_save_settings(move || {
         if let Some(ui) = weak.upgrade() {
-            let result = Settings::capture(&ui).save(&settings_path());
-            ui.set_current_file_text(
-                match result {
-                    Ok(()) => format!("설정 저장: {}", settings_path().display()),
-                    Err(e) => format!("설정 저장 실패: {e:#}"),
+            let result = Settings::capture(&ui).save(&path);
+            ui.set_current_file_text(match result {
+                Ok(()) => message!("Settings saved: {}", "설정 저장: {}", path.display()),
+                Err(e) => {
+                    diagnostic(&e.context(message!("Could not save settings", "설정 저장 실패")))
                 }
-                .into(),
-            );
+            });
         }
     });
     let weak = ui.as_weak();
@@ -178,14 +200,17 @@ pub fn setup(ui: &MainWindow) {
                 .set_file_name("preset.json")
                 .save_file()
             {
-                let result = Settings::capture(&ui).save(&path);
-                ui.set_current_file_text(
-                    match result {
-                        Ok(()) => "프리셋 저장 완료".into(),
-                        Err(e) => format!("프리셋 저장 실패: {e:#}"),
-                    }
-                    .into(),
-                );
+                let preset = Settings {
+                    language: None,
+                    ..Settings::capture(&ui)
+                };
+                let result = preset.save(&path);
+                ui.set_current_file_text(match result {
+                    Ok(()) => message!("Preset saved", "프리셋 저장 완료"),
+                    Err(e) => diagnostic(
+                        &e.context(message!("Could not save preset", "프리셋 저장 실패")),
+                    ),
+                });
             }
         }
     });
@@ -202,11 +227,11 @@ pub fn setup(ui: &MainWindow) {
                 match Settings::read(&path) {
                     Ok(settings) => {
                         settings.apply(&ui);
-                        ui.set_current_file_text("프리셋 불러오기 완료".into());
+                        ui.set_current_file_text(message!("Preset loaded", "프리셋 불러오기 완료"));
                     }
-                    Err(e) => {
-                        ui.set_current_file_text(format!("프리셋 불러오기 실패: {e:#}").into())
-                    }
+                    Err(e) => ui.set_current_file_text(diagnostic(
+                        &e.context(message!("Could not load preset", "프리셋 불러오기 실패")),
+                    )),
                 }
             }
         }
@@ -224,6 +249,14 @@ mod tests {
         assert_eq!(settings.crf, 23.0);
         assert!(!settings.all_audio);
         assert_eq!(settings.suffix, "_h265");
+        assert_eq!(settings.language, None);
+        let korean: Settings = serde_json::from_str(r#"{"language":"KO"}"#).unwrap();
+        assert_eq!(korean.language, Some(Language::Ko));
+        let english = Settings {
+            language: Some(Language::En),
+            ..Settings::default()
+        };
+        assert_eq!(serde_json::to_value(english).unwrap()["language"], "EN");
         let decoded: Settings =
             serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
         assert_eq!(decoded.crf, settings.crf);

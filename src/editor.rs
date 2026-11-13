@@ -1,8 +1,9 @@
 use crate::{
-    MainWindow,
+    LocalizedText, MainWindow,
     encoder::{self, Cancel, EncodeJob},
     job_queue::Queue,
     job_queue::is_video_file,
+    language::{Language, diagnostic, message},
     output,
     preview::{FrameRequester, enforce_playback_range, move_preview, playback_range},
     probe::probe_video,
@@ -65,22 +66,21 @@ pub fn setup(
                             ui.set_time_preview_text(seconds_to_hms(0.0).into());
                             ui.set_time_start_text(seconds_to_hms(0.0).into());
                             ui.set_time_end_text(seconds_to_hms(dur).into());
-                            ui.set_video_info_text(
-                                format!(
-                                    "{}  |  길이 {}  |  해상도 {}x{}",
-                                    path.file_name()
-                                        .map(|s| s.to_string_lossy())
-                                        .unwrap_or_default(),
-                                    seconds_to_hms(dur),
-                                    w as i32,
-                                    h as i32
-                                )
-                                .into(),
-                            );
-                            ui.set_crop_info_text(
-                                format!("크롭 영역: 전체 ({}x{})", w as i32, h as i32).into(),
-                            );
-                            ui.set_edit_status_text("비디오를 불러왔습니다. 타임라인에서 구간을 선택하고 크롭 영역을 지정하세요.".into());
+                            let name = path
+                                .file_name()
+                                .map(|s| s.to_string_lossy())
+                                .unwrap_or_default();
+                            let duration = seconds_to_hms(dur);
+                            let (width, height) = (w as i32, h as i32);
+                            ui.set_video_info_text(message!(
+                                "{name}  |  Duration {duration}  |  Resolution {width}×{height}",
+                                "{name}  |  길이 {duration}  |  해상도 {width}×{height}",
+                            ));
+                            ui.set_crop_info_text(full_crop_text(w, h));
+                            ui.set_edit_status_text(message!(
+                                "Video loaded. Select a range on the timeline and adjust the crop area.",
+                                "비디오를 불러왔습니다. 타임라인에서 구간을 선택하고 크롭 영역을 지정하세요.",
+                            ));
                             requester.request(
                                 weak.clone(),
                                 ffmpeg.clone(),
@@ -92,9 +92,10 @@ pub fn setup(
                         }
                         Err(e) => {
                             ui.set_video_loaded(false);
-                            ui.set_edit_status_text(
-                                format!("비디오 정보를 읽지 못했습니다: {}", e).into(),
-                            );
+                            ui.set_edit_status_text(diagnostic(&e.context(message!(
+                                "Could not read video information",
+                                "비디오 정보를 읽지 못했습니다",
+                            ))));
                         }
                     }
                 }
@@ -140,15 +141,15 @@ pub fn setup(
             let added = files.len();
             queue.add_files(&ui, files);
             if let Some(ui) = weak.upgrade() {
-                ui.set_current_file_text(format!("{} items added", added).into());
+                ui.set_current_file_text(message!("{added} added", "{added}개 추가됨"));
                 if let Some(p) = first_video {
                     let ffmpeg = ui.get_ffmpeg_path().to_string();
                     if ffmpeg.is_empty() {
-                        ui.set_edit_status_text("먼저 FFmpeg 경로를 설정하세요.".into());
+                        ui.set_edit_status_text(ffmpeg_required());
                     } else {
                         ui.set_current_video_path(p.to_string_lossy().to_string().into());
                         ui.set_selected_index(first_index as i32);
-                        ui.set_edit_status_text("비디오 정보를 읽는 중...".into());
+                        ui.set_edit_status_text(reading_video());
                         load_video_async(weak.clone(), requester.clone(), ffmpeg, p);
                     }
                 }
@@ -169,7 +170,7 @@ pub fn setup(
                 }
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter(
-                        "Video",
+                        Language::current(&ui).select("Video", "동영상"),
                         &[
                             "mp4", "mkv", "avi", "mov", "wmv", "flv", "mpg", "mpeg", "webm",
                         ],
@@ -178,7 +179,7 @@ pub fn setup(
                 {
                     let ffmpeg = ui.get_ffmpeg_path().to_string();
                     if ffmpeg.is_empty() {
-                        ui.set_edit_status_text("먼저 FFmpeg 경로를 설정하세요.".into());
+                        ui.set_edit_status_text(ffmpeg_required());
                         return;
                     }
                     // 목록에 이미 있으면 해당 항목을, 없으면 새로 추가한 뒤 선택해 연다.
@@ -195,9 +196,13 @@ pub fn setup(
                         idx = (model.row_count() - 1) as i32;
                     }
                     ui.set_selected_index(idx);
-                    ui.set_current_file_text(format!("{} files in list", model.row_count()).into());
+                    ui.set_current_file_text(message!(
+                        "Files in queue: {}",
+                        "대기 목록: {}개",
+                        model.row_count()
+                    ));
                     ui.set_current_video_path(path_str.into());
-                    ui.set_edit_status_text("비디오 정보를 읽는 중...".into());
+                    ui.set_edit_status_text(reading_video());
                     load_video_async(weak.clone(), requester.clone(), ffmpeg, path);
                 }
             }
@@ -216,7 +221,7 @@ pub fn setup(
                 }
                 let ffmpeg = ui.get_ffmpeg_path().to_string();
                 if ffmpeg.is_empty() {
-                    ui.set_edit_status_text("먼저 FFmpeg 경로를 설정하세요.".into());
+                    ui.set_edit_status_text(ffmpeg_required());
                     return;
                 }
                 let idx = ui.get_selected_index();
@@ -238,14 +243,15 @@ pub fn setup(
                 if let Some(p) = path {
                     if p.exists() {
                         ui.set_current_video_path(p.to_string_lossy().to_string().into());
-                        ui.set_edit_status_text("비디오 정보를 읽는 중...".into());
+                        ui.set_edit_status_text(reading_video());
                         load_video_async(weak.clone(), requester.clone(), ffmpeg, p);
                         return;
                     }
                 }
-                ui.set_edit_status_text(
-                    "선택된 비디오가 없습니다. 파일을 추가하거나 '파일 선택'을 누르세요.".into(),
-                );
+                ui.set_edit_status_text(message!(
+                    "No video selected. Add a file or click Choose file.",
+                    "선택된 비디오가 없습니다. 파일을 추가하거나 '파일 선택'을 누르세요.",
+                ));
             }
         });
     }
@@ -330,13 +336,12 @@ pub fn setup(
                 let y = (ui.get_crop_y() * vh).round() as i32;
                 let w = ((ui.get_crop_w() * vw).round() as i32).max(0);
                 let h = ((ui.get_crop_h() * vh).round() as i32).max(0);
-                ui.set_crop_info_text(
-                    format!(
-                        "크롭: x={} y={} 크기={}x{} (전체 {}x{})",
-                        x, y, w, h, vw as i32, vh as i32
-                    )
-                    .into(),
-                );
+                ui.set_crop_info_text(message!(
+                    "Crop: x={x} y={y}, size {w}×{h} (full {}×{})",
+                    "크롭: x={x} y={y}, 크기 {w}×{h} (전체 {}×{})",
+                    vw as i32,
+                    vh as i32,
+                ));
             }
         });
     }
@@ -386,14 +391,10 @@ pub fn setup(
                 ui.set_time_start_text(seconds_to_hms(0.0).into());
                 ui.set_time_end_text(seconds_to_hms(dur).into());
                 if ui.get_video_loaded() {
-                    ui.set_crop_info_text(
-                        format!(
-                            "크롭 영역: 전체 ({}x{})",
-                            ui.get_video_width() as i32,
-                            ui.get_video_height() as i32
-                        )
-                        .into(),
-                    );
+                    ui.set_crop_info_text(full_crop_text(
+                        ui.get_video_width(),
+                        ui.get_video_height(),
+                    ));
                     let ffmpeg = ui.get_ffmpeg_path().to_string();
                     if !ffmpeg.is_empty() {
                         let path = PathBuf::from(ui.get_current_video_path().to_string());
@@ -407,7 +408,10 @@ pub fn setup(
                         );
                     }
                 }
-                ui.set_edit_status_text("편집 옵션을 초기화했습니다.".into());
+                ui.set_edit_status_text(message!(
+                    "Edit options reset.",
+                    "편집 옵션을 초기화했습니다."
+                ));
             }
         });
     }
@@ -429,6 +433,26 @@ pub fn setup(
     frame_requester
 }
 
+fn ffmpeg_required() -> LocalizedText {
+    message!(
+        "Set the FFmpeg path first.",
+        "먼저 FFmpeg 경로를 설정하세요."
+    )
+}
+
+fn reading_video() -> LocalizedText {
+    message!("Reading video information…", "비디오 정보를 읽는 중...")
+}
+
+fn full_crop_text(width: f32, height: f32) -> LocalizedText {
+    message!(
+        "Crop area: full frame ({}×{})",
+        "크롭 영역: 전체 ({}×{})",
+        width as i32,
+        height as i32
+    )
+}
+
 #[derive(Debug, PartialEq)]
 struct CropRect {
     x: u32,
@@ -444,14 +468,23 @@ impl CropRect {
                 && vh >= 2.0
                 && w > 0.0
                 && h > 0.0,
-            "비디오 해상도 또는 크롭 영역이 올바르지 않습니다"
+            message!(
+                "Invalid video resolution or crop area",
+                "비디오 해상도 또는 크롭 영역이 올바르지 않습니다"
+            )
         );
         let (vw, vh) = (vw.round() as u32, vh.round() as u32);
         let x = (x.clamp(0.0, 1.0) * vw as f32).round() as u32;
         let y = (y.clamp(0.0, 1.0) * vh as f32).round() as u32;
         let w = ((w.clamp(0.0, 1.0) * vw as f32).round() as u32).min(vw - x);
         let h = ((h.clamp(0.0, 1.0) * vh as f32).round() as u32).min(vh - y);
-        anyhow::ensure!(w >= 2 && h >= 2, "크롭 영역은 최소 2×2 픽셀이어야 합니다");
+        anyhow::ensure!(
+            w >= 2 && h >= 2,
+            message!(
+                "The crop area must be at least 2×2 pixels",
+                "크롭 영역은 최소 2×2 픽셀이어야 합니다"
+            )
+        );
         Ok(Self { x, y, w, h })
     }
     fn is_full(&self, vw: f32, vh: f32) -> bool {
@@ -490,12 +523,15 @@ impl EditPlan {
                 && start >= 0.0
                 && end <= duration
                 && end > start,
-            "잘라낼 구간이 올바르지 않습니다."
+            message!("Invalid trim range.", "잘라낼 구간이 올바르지 않습니다.")
         );
         let trimmed = start > 0.0 || end < duration;
         anyhow::ensure!(
             trimmed || filter.is_some(),
-            "크롭 영역 또는 잘라낼 구간을 설정하세요."
+            message!(
+                "Set a crop area or trim range.",
+                "크롭 영역 또는 잘라낼 구간을 설정하세요."
+            )
         );
         let reencode = filter.is_some() || exact_cut;
         let range = if trimmed {
@@ -508,7 +544,10 @@ impl EditPlan {
             } else {
                 (start, end)
             };
-            anyhow::ensure!(end > start, "잘라낼 구간이 올바르지 않습니다.");
+            anyhow::ensure!(
+                end > start,
+                message!("Invalid trim range.", "잘라낼 구간이 올바르지 않습니다.")
+            );
             Some((start, end - start))
         } else {
             None
@@ -534,7 +573,10 @@ fn launch_edit(
     let ffmpeg = ui.get_ffmpeg_path().to_string();
     let src = PathBuf::from(ui.get_current_video_path().to_string());
     if ffmpeg.is_empty() || !src.is_file() {
-        ui.set_edit_status_text("FFmpeg 경로와 입력 파일을 확인하세요.".into());
+        ui.set_edit_status_text(message!(
+            "Check the FFmpeg path and input file.",
+            "FFmpeg 경로와 입력 파일을 확인하세요."
+        ));
         return;
     }
     let filter = match CropRect::from_normalized(
@@ -549,7 +591,7 @@ fn launch_edit(
             (!rect.is_full(ui.get_video_width(), ui.get_video_height())).then(|| rect.filter())
         }
         Err(e) => {
-            ui.set_edit_status_text(e.to_string().into());
+            ui.set_edit_status_text(diagnostic(&e));
             return;
         }
     };
@@ -563,7 +605,7 @@ fn launch_edit(
     ) {
         Ok(plan) => plan,
         Err(e) => {
-            ui.set_edit_status_text(e.to_string().into());
+            ui.set_edit_status_text(diagnostic(&e));
             return;
         }
     };
@@ -588,14 +630,14 @@ fn launch_edit(
     let folder = ui.get_output_folder();
     let output = output::directory(&src, std::path::Path::new(folder.as_str()))
         .join(format!("{stem}_{suffix}.{ext}"));
-    let label = if filter.is_some() && range.is_some() {
-        "크롭 + 정확한 컷"
+    let (english, korean) = if filter.is_some() && range.is_some() {
+        ("Crop + exact cut", "크롭 + 정확한 컷")
     } else if filter.is_some() {
-        "크롭"
+        ("Crop", "크롭")
     } else if exact {
-        "정확한 컷"
+        ("Exact cut", "정확한 컷")
     } else {
-        "빠른 컷"
+        ("Fast cut", "빠른 컷")
     };
     let tracks = settings::tracks(ui);
     let encode = exact.then(|| settings::encode_options(ui));
@@ -603,8 +645,8 @@ fn launch_edit(
     ui.set_is_playing(false);
     ui.set_edit_busy(true);
     ui.set_edit_progress(0.0);
-    ui.set_error_details("".into());
-    ui.set_edit_status_text(format!("{label} 진행 중...").into());
+    ui.set_error_details(LocalizedText::default());
+    ui.set_edit_status_text(message!("{english} in progress…", "{korean} 진행 중..."));
     cancel.reset();
     let weak = ui.as_weak();
     let worker = tokio::spawn(async move {
@@ -640,18 +682,19 @@ fn launch_edit(
                 match result {
                     Ok(path) => {
                         ui.set_edit_progress(1.0);
-                        ui.set_edit_status_text(format!("{label} 완료: {}", path.display()).into());
+                        ui.set_edit_status_text(message!(
+                            "{english} complete: {}",
+                            "{korean} 완료: {}",
+                            path.display()
+                        ));
                     }
                     Err(e) => {
-                        let detail = format!("{e:#}");
-                        ui.set_edit_status_text(
-                            format!(
-                                "{label} {}.",
-                                if cancel.stopped() { "취소" } else { "실패" }
-                            )
-                            .into(),
-                        );
-                        ui.set_error_details(detail.into());
+                        ui.set_edit_status_text(if cancel.stopped() {
+                            message!("{english} cancelled.", "{korean} 취소.")
+                        } else {
+                            message!("{english} failed.", "{korean} 실패.")
+                        });
+                        ui.set_error_details(diagnostic(&e));
                     }
                 }
             }

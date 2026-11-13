@@ -1,13 +1,15 @@
 use crate::{
-    MainWindow, conversion, editor,
+    JobStatus, MainWindow, conversion, editor,
     encoder::Cancel,
     job_queue::{self, Queue},
+    language::Language,
+    settings,
     windows::TaskbarProgress,
 };
 use slint::{
-    ComponentHandle, Model,
+    ComponentHandle, LogicalPosition, Model,
     platform::{
-        EventLoopProxy, Platform, WindowAdapter,
+        EventLoopProxy, Platform, PointerEventButton, WindowAdapter, WindowEvent,
         software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
     },
 };
@@ -59,6 +61,16 @@ fn render_dropped_files() {
     let (send, events) = mpsc::channel();
     slint::platform::set_platform(Box::new(HeadlessPlatform(window.clone(), send))).unwrap();
     let ui = MainWindow::new().unwrap();
+    let directory =
+        std::env::temp_dir().join(format!("videoencoder-ui-drop-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let settings_path = directory.join("settings.json");
+    std::fs::write(&settings_path, r#"{"encoder":0}"#).unwrap();
+    settings::setup(&ui, settings_path.clone());
+    assert_eq!(Language::current(&ui), Language::system());
+    std::fs::write(&settings_path, r#"{"encoder":0,"language":"EN"}"#).unwrap();
+    settings::setup(&ui, settings_path.clone());
+    assert_eq!(Language::current(&ui), Language::En);
     let workers = Arc::new(Mutex::new(Vec::new()));
     let queue = Queue::new(&ui, Cancel::default(), workers.clone());
     let taskbar = TaskbarProgress::new();
@@ -89,9 +101,32 @@ fn render_dropped_files() {
         });
     };
     render();
-    let directory =
-        std::env::temp_dir().join(format!("videoencoder-ui-drop-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).unwrap();
+    ui.set_cut_mode(1);
+    ui.set_conversion_format(2);
+    let toggle_language = || {
+        let position = LogicalPosition::new(812.0, 34.0);
+        let button = PointerEventButton::Left;
+        ui.window()
+            .dispatch_event(WindowEvent::PointerPressed { position, button });
+        ui.window()
+            .dispatch_event(WindowEvent::PointerReleased { position, button });
+    };
+    toggle_language();
+    render();
+    assert!(ui.get_korean());
+    assert_eq!(ui.get_cut_mode(), 1);
+    assert_eq!(ui.get_conversion_format(), 2);
+    assert!(!ui.get_dark_mode());
+    ui.invoke_save_settings();
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&settings_path).unwrap()).unwrap();
+    assert_eq!(saved["language"], "KO");
+    toggle_language();
+    render();
+    assert!(!ui.get_korean());
+    assert_eq!(ui.get_cut_mode(), 1);
+    assert_eq!(ui.get_conversion_format(), 2);
+    ui.set_conversion_format(0);
     let path = directory.join(format!(
         "긴 파일명_日本語_{}.mp4",
         "long_filename_".repeat(10)
@@ -134,7 +169,8 @@ fn render_dropped_files() {
     ui.set_conversion_height("0".into());
     ui.invoke_start_conversion(false);
     assert!(!ui.get_conversion_busy());
-    assert!(ui.get_conversion_status().contains("세로"));
+    assert!(ui.get_conversion_status().korean.contains("세로"));
+    assert!(ui.get_conversion_status().english.contains("Height"));
     render();
     ui.invoke_remove_conversion_job(0);
     assert_eq!(ui.get_conversion_jobs().row_count(), 1);
@@ -148,6 +184,7 @@ fn render_dropped_files() {
     preview.stop_playback();
     std::fs::remove_file(path).unwrap();
     std::fs::remove_file(other).unwrap();
+    std::fs::remove_file(settings_path).unwrap();
     std::fs::remove_dir(directory).unwrap();
 }
 
@@ -179,18 +216,18 @@ fn check_conversion_batch(ui: &MainWindow, events: &mpsc::Receiver<Event>) {
     ui.invoke_move_job(0, 1);
     while encoding_jobs
         .iter()
-        .any(|job| job.source_info == "원본 정보 읽는 중…")
+        .any(|job| job.source_info.korean == "원본 정보 읽는 중…")
     {
         events
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap()();
     }
     assert_eq!(
-        encoding_jobs.row_data(0).unwrap().source_info,
+        encoding_jobs.row_data(0).unwrap().source_info.english,
         "64 × 48 px · 00:00:00.400"
     );
     assert_eq!(
-        encoding_jobs.row_data(1).unwrap().source_info,
+        encoding_jobs.row_data(1).unwrap().source_info.english,
         "96 × 64 px · 00:00:00.400"
     );
     ui.set_active_tab(2);
@@ -211,18 +248,18 @@ fn check_conversion_batch(ui: &MainWindow, events: &mpsc::Receiver<Event>) {
     ui.invoke_move_conversion_job(2, -1);
     while jobs
         .iter()
-        .any(|job| job.source_info == "원본 정보 읽는 중…")
+        .any(|job| job.source_info.korean == "원본 정보 읽는 중…")
     {
         events
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap()();
     }
     assert_eq!(
-        jobs.row_data(0).unwrap().source_info,
+        jobs.row_data(0).unwrap().source_info.english,
         "96 × 64 px · 00:00:00.400"
     );
     assert_eq!(
-        jobs.row_data(1).unwrap().source_info,
+        jobs.row_data(1).unwrap().source_info.english,
         "64 × 48 px · 00:00:00.400"
     );
     ui.invoke_move_conversion_job(2, -1);
@@ -233,14 +270,14 @@ fn check_conversion_batch(ui: &MainWindow, events: &mpsc::Receiver<Event>) {
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap()();
     }
-    assert_eq!(jobs.row_data(0).unwrap().status, "완료");
-    assert_eq!(jobs.row_data(1).unwrap().status, "실패");
-    assert_eq!(jobs.row_data(2).unwrap().status, "완료");
+    assert_eq!(jobs.row_data(0).unwrap().status, JobStatus::Done);
+    assert_eq!(jobs.row_data(1).unwrap().status, JobStatus::Failed);
+    assert_eq!(jobs.row_data(2).unwrap().status, JobStatus::Done);
     assert!(scratch.0.join("first.gif").is_file());
     assert!(scratch.0.join("second.gif").is_file());
 
     slint::platform::update_timers_and_animations();
-    assert_eq!(jobs.row_data(0).unwrap().status, "완료");
+    assert_eq!(jobs.row_data(0).unwrap().status, JobStatus::Done);
     for change_option in [
         (|ui: &MainWindow| ui.set_conversion_format(2)) as fn(&MainWindow),
         |ui| ui.set_conversion_width("40".into()),
@@ -248,10 +285,10 @@ fn check_conversion_batch(ui: &MainWindow, events: &mpsc::Receiver<Event>) {
     ] {
         change_option(ui);
         slint::platform::update_timers_and_animations();
-        assert_eq!(jobs.row_data(0).unwrap().status, "대기");
-        assert!(jobs.row_data(0).unwrap().detail.is_empty());
-        assert_eq!(jobs.row_data(1).unwrap().status, "실패");
-        assert_eq!(jobs.row_data(2).unwrap().status, "대기");
+        assert_eq!(jobs.row_data(0).unwrap().status, JobStatus::Waiting);
+        assert!(jobs.row_data(0).unwrap().detail.english.is_empty());
+        assert_eq!(jobs.row_data(1).unwrap().status, JobStatus::Failed);
+        assert_eq!(jobs.row_data(2).unwrap().status, JobStatus::Waiting);
         assert_eq!(ui.get_conversion_progress(), 0.0);
         ui.invoke_start_conversion(false);
         assert!(ui.get_conversion_busy());
@@ -260,8 +297,8 @@ fn check_conversion_batch(ui: &MainWindow, events: &mpsc::Receiver<Event>) {
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap()();
         }
-        assert_eq!(jobs.row_data(0).unwrap().status, "완료");
-        assert_eq!(jobs.row_data(2).unwrap().status, "완료");
+        assert_eq!(jobs.row_data(0).unwrap().status, JobStatus::Done);
+        assert_eq!(jobs.row_data(2).unwrap().status, JobStatus::Done);
     }
     assert!(scratch.0.join("first.avif").is_file());
     assert!(scratch.0.join("first (2).avif").is_file());

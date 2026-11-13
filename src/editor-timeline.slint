@@ -1,3 +1,4 @@
+import { AppLanguage } from "language.slint";
 import { AppTheme } from "theme.slint";
 
 // Focus and keyboard behavior belong to each endpoint; pointer dragging uses
@@ -167,9 +168,9 @@ export component EditorTimeline inherits Rectangle {
     HorizontalLayout {
         y: 36px; height: 20px;
         padding-left: root.track-left; padding-right: root.track-left;
-        Text { text: "시작 " + root.start-text; color: AppTheme.start; font-size: 12px; horizontal-stretch: 1; }
+        Text { text: AppLanguage.tr("Start ", "시작 ") + root.start-text; color: AppTheme.start; font-size: 12px; horizontal-stretch: 1; }
         Text { text: root.preview-text; color: AppTheme.accent; font-size: 12px; horizontal-alignment: center; horizontal-stretch: 1; }
-        Text { text: "끝 " + root.end-text; color: AppTheme.end; font-size: 12px; horizontal-alignment: right; horizontal-stretch: 1; }
+        Text { text: AppLanguage.tr("End ", "끝 ") + root.end-text; color: AppTheme.end; font-size: 12px; horizontal-alignment: right; horizontal-stretch: 1; }
     }
 
     // One full-width range slider with two handles, aligned with playback.
@@ -191,7 +192,7 @@ export component EditorTimeline inherits Rectangle {
         maximum: max(0, root.end - root.minimum-gap);
         step: root.frame-step;
         tint: AppTheme.start;
-        label: "시작점 설정";
+        label: AppLanguage.tr("Set start", "시작점 설정");
         edited(value) => { root.range-changed(); }
     }
     end-handle := TimelineHandle {
@@ -202,7 +203,7 @@ export component EditorTimeline inherits Rectangle {
         maximum: root.duration;
         step: root.frame-step;
         tint: AppTheme.end;
-        label: "끝점 설정";
+        label: AppLanguage.tr("Set end", "끝점 설정");
         edited(value) => { root.range-changed(); }
     }
     TouchArea {

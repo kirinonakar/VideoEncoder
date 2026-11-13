@@ -1,3 +1,4 @@
+import { AppLanguage, LocalizedText } from "language.slint";
 import { AppTheme } from "theme.slint";
 
 export global FileNameTooltip {
@@ -59,7 +60,7 @@ export component FileNameText inherits Text {
 
 export component QueueSource inherits VerticalLayout {
     in property <string> path;
-    in property <string> info;
+    in property <LocalizedText> info;
 
     horizontal-stretch: 1;
     spacing: 2px;
@@ -76,7 +77,7 @@ export component QueueSource inherits VerticalLayout {
         }
     }
     Text {
-        text: root.info;
+        text: AppLanguage.text(root.info);
         color: AppTheme.muted;
         font-size: 12px;
         overflow: elide;

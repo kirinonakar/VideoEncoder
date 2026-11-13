@@ -4,6 +4,7 @@ mod conversion;
 mod editor;
 mod encoder;
 mod job_queue;
+mod language;
 mod output;
 mod playback_range;
 mod preview;
@@ -15,6 +16,8 @@ mod windows;
 
 use slint::ComponentHandle;
 use std::sync::{Arc, Mutex};
+
+use language::{Language, diagnostic};
 
 fn seconds_to_hms(seconds: f32) -> String {
     let total = seconds.max(0.0) as u64;
@@ -29,7 +32,8 @@ fn seconds_to_hms(seconds: f32) -> String {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let ui = MainWindow::new()?;
-    settings::setup(&ui);
+    let settings_path = settings::settings_path();
+    settings::setup(&ui, settings_path.clone());
     let taskbar = windows::TaskbarProgress::new();
     let weak = ui.as_weak();
     ui.on_native_theme_changed(move || {
@@ -75,11 +79,15 @@ async fn main() -> anyhow::Result<()> {
     for handle in handles {
         let _ = handle.await;
     }
-    if let Err(e) = settings::Settings::capture(&ui).save(&settings::settings_path()) {
-        eprintln!("설정 저장 실패: {e:#}");
+    if let Err(e) = settings::Settings::capture(&ui).save(&settings_path) {
+        let language = Language::current(&ui);
+        let title = language.select("Could not save settings", "설정 저장 실패");
+        let error = diagnostic(&e);
+        let detail = language.select(error.english, error.korean);
+        eprintln!("{title}: {detail}");
         rfd::MessageDialog::new()
-            .set_title("설정 저장 실패")
-            .set_description(format!("{e:#}"))
+            .set_title(title)
+            .set_description(detail.as_str())
             .set_level(rfd::MessageLevel::Error)
             .show();
     }

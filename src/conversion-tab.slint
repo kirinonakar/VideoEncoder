@@ -1,13 +1,14 @@
-import { Button, ComboBox, LineEdit, ProgressIndicator, ScrollView, TextEdit } from "std-widgets.slint";
+import { AppLanguage, JobStatus, LocalizedText, LanguageComboBox } from "language.slint";
+import { Button, LineEdit, ProgressIndicator, ScrollView, TextEdit } from "std-widgets.slint";
 import { AppTheme } from "theme.slint";
 import { FileNameText, QueueSource } from "file-name.slint";
 
 export struct ConversionItem {
     id: int,
     path: string,
-    source-info: string,
-    status: string,
-    detail: string,
+    source-info: LocalizedText,
+    status: JobStatus,
+    detail: LocalizedText,
 }
 
 export component ConversionTab inherits VerticalLayout {
@@ -16,8 +17,8 @@ export component ConversionTab inherits VerticalLayout {
     in property <bool> busy;
     in property <bool> other-job-running;
     in property <float> progress;
-    in property <string> status;
-    in property <string> detail;
+    in property <LocalizedText> status;
+    in property <LocalizedText> detail;
     in-out property <int> format-index;
     in-out property <string> resize-width;
     in-out property <string> resize-height;
@@ -47,10 +48,11 @@ export component ConversionTab inherits VerticalLayout {
 
             HorizontalLayout {
                 spacing: 10px;
-                Text { text: "출력 형식"; width: 84px; color: AppTheme.text; vertical-alignment: center; }
-                ComboBox {
+                Text { text: AppLanguage.tr("Format", "출력 형식"); width: 98px; color: AppTheme.text; vertical-alignment: center; }
+                LanguageComboBox {
                     width: 200px;
-                    model: ["Animated GIF", "Animated WebP", "Animated AVIF"];
+                    english: ["Animated GIF", "Animated WebP", "Animated AVIF"];
+                    korean: ["애니메이션 GIF", "애니메이션 WebP", "애니메이션 AVIF"];
                     current-index <=> root.format-index;
                     enabled: !root.busy;
                 }
@@ -59,11 +61,11 @@ export component ConversionTab inherits VerticalLayout {
 
             HorizontalLayout {
                 spacing: 10px;
-                Text { text: "출력 크기"; width: 84px; color: AppTheme.text; vertical-alignment: center; }
+                Text { text: AppLanguage.tr("Size", "출력 크기"); width: 98px; color: AppTheme.text; vertical-alignment: center; }
                 LineEdit {
                     width: 100px;
                     text <=> root.resize-width;
-                    placeholder-text: "가로 (px)";
+                    placeholder-text: AppLanguage.tr("Width (px)", "가로 (px)");
                     input-type: number;
                     enabled: !root.busy;
                 }
@@ -71,13 +73,13 @@ export component ConversionTab inherits VerticalLayout {
                 LineEdit {
                     width: 100px;
                     text <=> root.resize-height;
-                    placeholder-text: "세로 (px)";
+                    placeholder-text: AppLanguage.tr("Height (px)", "세로 (px)");
                     input-type: number;
                     enabled: !root.busy;
                 }
                 Text {
                     horizontal-stretch: 1;
-                    text: "한쪽만 입력하면 비율 유지 · 모두 비우면 원본 크기";
+                    text: AppLanguage.tr("Enter one dimension to keep the aspect ratio. Leave both blank for original size.", "한쪽만 입력하면 비율 유지 · 모두 비우면 원본 크기");
                     color: AppTheme.muted;
                     font-size: 12px;
                     vertical-alignment: center;
@@ -87,18 +89,18 @@ export component ConversionTab inherits VerticalLayout {
 
             HorizontalLayout {
                 spacing: 10px;
-                Text { text: "출력 폴더"; width: 84px; color: AppTheme.text; vertical-alignment: center; }
+                Text { text: AppLanguage.tr("Output folder", "출력 폴더"); width: 98px; color: AppTheme.text; vertical-alignment: center; }
                 Rectangle {
                     horizontal-stretch: 1;
                     folder-hover := TouchArea { }
                     FileNameText {
                         width: parent.width;
                         height: parent.height;
-                        text: root.output-folder != "" ? root.output-folder : "원본과 같은 폴더";
+                        text: root.output-folder != "" ? root.output-folder : AppLanguage.tr("Same as source", "원본과 같은 폴더");
                         hovered: folder-hover.has-hover;
                     }
                 }
-                Text { text: "인코딩 탭에서 설정"; color: AppTheme.muted; font-size: 12px; vertical-alignment: center; }
+                Text { text: AppLanguage.tr("Set on the Encode tab", "인코딩 탭에서 설정"); color: AppTheme.muted; font-size: 12px; vertical-alignment: center; }
             }
         }
     }
@@ -117,16 +119,16 @@ export component ConversionTab inherits VerticalLayout {
             HorizontalLayout {
                 spacing: 8px;
                 Text {
-                    text: "변환 대기 목록 (" + root.jobs.length + ")";
+                    text: AppLanguage.tr("Conversion queue (", "변환 대기 목록 (") + root.jobs.length + ")";
                     color: AppTheme.text;
                     font-size: 16px;
                     font-weight: 600;
                     vertical-alignment: center;
                 }
                 Rectangle { horizontal-stretch: 1; }
-                Button { text: "파일 추가"; enabled: !root.busy; clicked => { root.pick-files(); } }
-                Button { text: "폴더 추가"; enabled: !root.busy; clicked => { root.pick-folder(); } }
-                Button { text: "목록 비우기"; enabled: !root.busy && root.jobs.length > 0; clicked => { root.clear-list(); } }
+                Button { text: AppLanguage.tr("Add files", "파일 추가"); enabled: !root.busy; clicked => { root.pick-files(); } }
+                Button { text: AppLanguage.tr("Add folder", "폴더 추가"); enabled: !root.busy; clicked => { root.pick-folder(); } }
+                Button { text: AppLanguage.tr("Clear queue", "목록 비우기"); enabled: !root.busy && root.jobs.length > 0; clicked => { root.clear-list(); } }
             }
 
             Rectangle {
@@ -138,7 +140,7 @@ export component ConversionTab inherits VerticalLayout {
                 border-color: AppTheme.separator;
 
                 if root.jobs.length == 0 : Text {
-                    text: "파일이나 폴더를 드래그해서 추가하세요";
+                    text: AppLanguage.tr("Drag files or folders here", "파일이나 폴더를 드래그해서 추가하세요");
                     color: AppTheme.muted;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -153,19 +155,19 @@ export component ConversionTab inherits VerticalLayout {
                         for job[index] in root.jobs : HorizontalLayout {
                             spacing: 6px;
                             Text {
-                                text: job.status;
-                                width: 36px;
-                                color: job.status == "실패" ? AppTheme.end : AppTheme.accent;
+                                text: AppLanguage.job-status(job.status);
+                                width: 66px;
+                                color: job.status == JobStatus.Failed ? AppTheme.end : AppTheme.accent;
                                 vertical-alignment: center;
                             }
                             QueueSource {
                                 path: job.path;
                                 info: job.source-info;
                             }
-                            Button { text: "결과"; enabled: !root.busy && job.detail != ""; clicked => { root.show-result(index); } }
+                            Button { text: AppLanguage.tr("Result", "결과"); enabled: !root.busy && AppLanguage.text(job.detail) != ""; clicked => { root.show-result(index); } }
                             Button { text: "↑"; width: 32px; enabled: !root.busy && index > 0; clicked => { root.move-job(index, -1); } }
                             Button { text: "↓"; width: 32px; enabled: !root.busy && index + 1 < root.jobs.length; clicked => { root.move-job(index, 1); } }
-                            Button { text: "제거"; enabled: !root.busy; clicked => { root.remove-job(index); } }
+                            Button { text: AppLanguage.tr("Remove", "제거"); enabled: !root.busy; clicked => { root.remove-job(index); } }
                         }
                     }
                 }
@@ -176,13 +178,13 @@ export component ConversionTab inherits VerticalLayout {
     HorizontalLayout {
         spacing: 10px;
         Button {
-            text: "변환 시작";
+            text: AppLanguage.tr("Start conversion", "변환 시작");
             primary: true;
             enabled: root.jobs.length > 0 && !root.busy && !root.other-job-running;
             clicked => { root.start(); }
         }
-        Button { text: "취소"; enabled: root.busy; clicked => { root.cancel(); } }
-        Button { text: "실패만 재시도"; enabled: root.jobs.length > 0 && !root.busy && !root.other-job-running; clicked => { root.retry(); } }
+        Button { text: AppLanguage.tr("Cancel", "취소"); enabled: root.busy; clicked => { root.cancel(); } }
+        Button { text: AppLanguage.tr("Retry failed", "실패만 재시도"); enabled: root.jobs.length > 0 && !root.busy && !root.other-job-running; clicked => { root.retry(); } }
         Rectangle { horizontal-stretch: 1; }
     }
 
@@ -192,9 +194,9 @@ export component ConversionTab inherits VerticalLayout {
         indeterminate: root.busy && root.progress == 0;
     }
 
-    Text { text: root.status; color: AppTheme.text; wrap: word-wrap; }
-    if root.detail != "": TextEdit {
-        text: root.detail;
+    Text { text: AppLanguage.text(root.status); color: AppTheme.text; wrap: word-wrap; }
+    if AppLanguage.text(root.detail) != "": TextEdit {
+        text: AppLanguage.text(root.detail);
         read-only: true;
         wrap: char-wrap;
         height: 112px;

@@ -1,6 +1,11 @@
 #[cfg(test)]
 use crate::probe::probe_video;
-use crate::{MainWindow, playback_range::PlaybackRange, seconds_to_hms};
+use crate::{
+    MainWindow,
+    language::{diagnostic, message},
+    playback_range::PlaybackRange,
+    seconds_to_hms,
+};
 use slint::ComponentHandle;
 use std::{
     path::{Path, PathBuf},
@@ -146,7 +151,10 @@ fn spawn_audio_playback(
     let mut decoder = decoder_cmd.spawn()?;
     let decoder_stdout = decoder.stdout.take().ok_or_else(|| {
         let _ = decoder.start_kill();
-        anyhow::anyhow!("오디오 디코더 출력 파이프를 열 수 없습니다")
+        anyhow::anyhow!(message!(
+            "Could not open the audio decoder output pipe",
+            "오디오 디코더 출력 파이프를 열 수 없습니다"
+        ))
     })?;
 
     let mut player_cmd = crate::encoder::command(ffplay);
@@ -177,7 +185,10 @@ fn spawn_audio_playback(
         None => {
             let _ = decoder.start_kill();
             let _ = player.start_kill();
-            return Err(anyhow::anyhow!("ffplay 입력 파이프를 열 수 없습니다"));
+            return Err(anyhow::anyhow!(message!(
+                "Could not open the ffplay input pipe",
+                "ffplay 입력 파이프를 열 수 없습니다"
+            )));
         }
     };
 
@@ -266,16 +277,19 @@ impl FrameRequester {
                         if (ui.get_preview_time() - frame_t).abs() > 0.1 {
                             return;
                         }
-                        match &res {
+                        match res {
                             Ok((bytes, width, height)) => {
                                 let buf =
                                     slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                                        bytes, *width, *height,
+                                        &bytes, width, height,
                                     );
                                 ui.set_video_image(slint::Image::from_rgba8(buf));
                             }
                             Err(e) => {
-                                ui.set_edit_status_text(format!("프레임 추출 실패: {}", e).into());
+                                ui.set_edit_status_text(diagnostic(&e.context(message!(
+                                    "Could not extract a frame",
+                                    "프레임 추출 실패"
+                                ))));
                             }
                         }
                     }
@@ -329,9 +343,10 @@ impl FrameRequester {
                     let w = weak.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = w.upgrade() {
-                            ui.set_edit_status_text(
-                                "ffplay 를 찾을 수 없어 소리 없이 재생합니다.".into(),
-                            );
+                            ui.set_edit_status_text(message!(
+                                "ffplay was not found. Playing without sound.",
+                                "ffplay를 찾을 수 없어 소리 없이 재생합니다."
+                            ));
                         }
                     });
                 }
@@ -347,7 +362,10 @@ impl FrameRequester {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = w.upgrade() {
                         ui.set_is_playing(false);
-                        ui.set_edit_status_text(format!("재생 시작 실패: {}", e).into());
+                        ui.set_edit_status_text(diagnostic(
+                            &anyhow::Error::new(e)
+                                .context(message!("Could not start playback", "재생 시작 실패")),
+                        ));
                     }
                 });
                 return;
@@ -533,7 +551,10 @@ impl FrameRequester {
                     if let Some(ui) = w2.upgrade() {
                         ui.set_is_playing(false);
                         if let Some(error) = playback_error {
-                            ui.set_edit_status_text(format!("재생 실패: {}", error).into());
+                            ui.set_edit_status_text(message!(
+                                "Playback failed: {error}",
+                                "재생 실패: {error}"
+                            ));
                         }
                     }
                 });
@@ -651,7 +672,10 @@ async fn extract_frame(
         .await?;
     anyhow::ensure!(
         !out.stdout.is_empty(),
-        "프레임 추출 실패 (시간이 영상 끝을 벗어났을 수 있습니다)"
+        message!(
+            "Could not extract a frame. The position may be beyond the end of the video.",
+            "프레임 추출 실패 (시간이 영상 끝을 벗어났을 수 있습니다)"
+        )
     );
     Ok(out.stdout)
 }

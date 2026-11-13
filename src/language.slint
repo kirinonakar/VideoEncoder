@@ -1,0 +1,55 @@
+import { ComboBox } from "std-widgets.slint";
+
+export struct LocalizedText { english: string, korean: string }
+
+export enum JobStatus { Waiting, Running, Done, Failed, Cancelled }
+
+export global AppLanguage {
+    in-out property <bool> korean;
+
+    public pure function tr(english: string, korean: string) -> string {
+        return self.korean ? korean : english;
+    }
+
+    public pure function text(message: LocalizedText) -> string {
+        return self.tr(message.english, message.korean);
+    }
+
+    public pure function job-status(status: JobStatus) -> string {
+        if (status == JobStatus.Running) { return self.tr("Running", "진행"); }
+        if (status == JobStatus.Done) { return self.tr("Done", "완료"); }
+        if (status == JobStatus.Failed) { return self.tr("Failed", "실패"); }
+        if (status == JobStatus.Cancelled) { return self.tr("Cancelled", "취소"); }
+        return self.tr("Waiting", "대기");
+    }
+}
+// ComboBox resets its selection when the model changes. Keep a fixed model
+// per language and share the selected index between the two controls.
+export component LanguageComboBox inherits Rectangle {
+    in property <[string]> english;
+    in property <[string]> korean;
+    in property <bool> enabled: true;
+    in-out property <int> current-index;
+
+    min-width: max(english-combo.min-width, korean-combo.min-width);
+    min-height: max(english-combo.min-height, korean-combo.min-height);
+    horizontal-stretch: 1;
+    vertical-stretch: 0;
+
+    english-combo := ComboBox {
+        width: 100%;
+        height: 100%;
+        visible: !AppLanguage.korean;
+        enabled: root.enabled && self.visible;
+        model: root.english;
+        current-index <=> root.current-index;
+    }
+    korean-combo := ComboBox {
+        width: 100%;
+        height: 100%;
+        visible: AppLanguage.korean;
+        enabled: root.enabled && self.visible;
+        model: root.korean;
+        current-index <=> root.current-index;
+    }
+}
