@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
 };
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 #[derive(Debug, Default, Deserialize)]
 pub struct Stream {
@@ -25,6 +26,13 @@ pub struct Stream {
     pub nb_frames: Option<String>,
     #[serde(default)]
     pub disposition: Disposition,
+    #[serde(default)]
+    pub side_data_list: Vec<SideData>,
+}
+#[derive(Debug, Deserialize)]
+pub struct SideData {
+    #[serde(default)]
+    pub rotation: Option<f64>,
 }
 #[derive(Debug, Default, Deserialize)]
 pub struct Disposition {
@@ -105,6 +113,50 @@ pub async fn analyze(ffmpeg: &str, path: &Path, cancel: &Cancel) -> Result<Media
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout).context("FFprobe JSON 분석 실패")
+}
+
+pub async fn packet_duration(
+    ffmpeg: &str,
+    path: &Path,
+    stream: u32,
+    cancel: &Cancel,
+) -> Option<f64> {
+    let ffprobe = resolve_tool(ffmpeg, "ffprobe")?;
+    let mut child = command(ffprobe)
+        .args(["-v", "error", "-select_streams"])
+        .arg(stream.to_string())
+        .args([
+            "-show_entries",
+            "packet=pts_time,duration_time",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut lines = BufReader::new(child.stdout.take()?).lines();
+    let duration = async {
+        let mut start = f64::INFINITY;
+        let mut end = f64::NEG_INFINITY;
+        while let Some(line) = lines.next_line().await.ok()? {
+            if let Some((pts, duration)) = line.split_once(',') {
+                if let (Ok(pts), Ok(duration)) = (pts.parse::<f64>(), duration.parse::<f64>()) {
+                    start = start.min(pts);
+                    end = end.max(pts + duration);
+                }
+            }
+        }
+        let duration = end - start;
+        (child.wait().await.ok()?.success() && duration.is_finite() && duration > 0.0)
+            .then_some(duration)
+    };
+    tokio::select! {
+        result = duration => result,
+        _ = cancel.cancelled() => None,
+    }
 }
 
 pub async fn probe_video(ffmpeg: &str, path: &Path) -> Result<(f32, f32, f32, f32)> {

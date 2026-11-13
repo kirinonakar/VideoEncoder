@@ -1,6 +1,11 @@
 use std::path::Path;
 
 fn main() {
+    // Slint's generated debug constructors need more stack than the Windows default.
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        println!("cargo:rustc-link-arg=/STACK:8388608");
+    }
+
     // 1. Process Icon for Windows Executable
     if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "windows" {
         let mut res = winres::WindowsResource::new();

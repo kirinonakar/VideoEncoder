@@ -35,11 +35,32 @@ impl Cancel {
 }
 
 pub fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let program = program.as_ref();
+    #[cfg(windows)]
+    let target = scoop_shim_target(program);
+    #[cfg(windows)]
+    let program = target.as_deref().map(Path::as_os_str).unwrap_or(program);
     let mut cmd = Command::new(program);
     cmd.kill_on_drop(true);
     #[cfg(windows)]
     cmd.creation_flags(0x08000000);
     cmd
+}
+
+#[cfg(windows)]
+fn scoop_shim_target(program: &std::ffi::OsStr) -> Option<PathBuf> {
+    let executable = which::which(program).ok()?;
+    if !executable
+        .parent()?
+        .file_name()?
+        .eq_ignore_ascii_case("shims")
+    {
+        return None;
+    }
+    // A Scoop shim starts a separate process that can outlive the shim on cancellation.
+    let config = std::fs::read_to_string(executable.with_extension("shim")).ok()?;
+    let target = PathBuf::from(config.trim().strip_prefix("path = \"")?.strip_suffix('"')?);
+    (target.is_absolute() && target.is_file()).then_some(target)
 }
 
 #[derive(Clone, Copy, Default)]
@@ -159,7 +180,13 @@ pub async fn watch_progress(
                 anyhow::bail!("작업 취소됨");
             }
             read = stderr.read(&mut buf) => {
-                let n = read.context("FFmpeg 로그 읽기 실패")?;
+                let n = match read {
+                    Ok(n) => n,
+                    Err(error) => {
+                        let _ = child.kill().await;
+                        return Err(error).context("FFmpeg 로그 읽기 실패");
+                    }
+                };
                 if n == 0 {
                     break tokio::select! {
                         s = child.wait() => s?,
@@ -257,7 +284,15 @@ pub async fn run_to_output(
         output.finalize().context("최종 출력 저장 실패")
     }
     .await;
-    result.with_context(|| format!("미완성/복구 파일: {}", output.incomplete.display()))
+    if let Err(error) = &result {
+        output.discard().with_context(|| {
+            format!(
+                "{error:#}\n미완성 파일 정리 실패: {}",
+                output.incomplete.display()
+            )
+        })?;
+    }
+    result
 }
 
 #[cfg(test)]

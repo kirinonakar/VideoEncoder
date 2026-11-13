@@ -1,6 +1,5 @@
 use crate::{
     MainWindow,
-    conversion,
     encoder::{self, Cancel, EncodeJob},
     job_queue::Queue,
     job_queue::is_video_file,
@@ -114,7 +113,7 @@ pub fn setup(
                 return;
             };
             if ui.get_conversion_tab_active() {
-                conversion::select_dropped_source(&ui, paths_str.as_str());
+                ui.invoke_conversion_files_dropped(paths_str);
                 return;
             }
             if ui.get_is_encoding() || ui.get_edit_busy() {

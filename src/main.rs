@@ -41,10 +41,12 @@ async fn main() -> anyhow::Result<()> {
     let batch_cancel = encoder::Cancel::default();
     let edit_cancel = encoder::Cancel::default();
     let conversion_cancel = encoder::Cancel::default();
+    let conversion_probe_cancel = encoder::Cancel::default();
     let workers = Arc::new(Mutex::new(Vec::new()));
     conversion::setup(
         &ui,
         conversion_cancel.clone(),
+        conversion_probe_cancel.clone(),
         workers.clone(),
         taskbar.clone(),
     );
@@ -67,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
     batch_cancel.stop();
     edit_cancel.stop();
     conversion_cancel.stop();
+    conversion_probe_cancel.stop();
     preview.stop_playback();
     let handles = std::mem::take(&mut *workers.lock().unwrap());
     for handle in handles {

@@ -1,9 +1,17 @@
-import { Button, ComboBox, LineEdit, ProgressIndicator, TextEdit } from "std-widgets.slint";
+import { Button, ComboBox, LineEdit, ProgressIndicator, ScrollView, TextEdit } from "std-widgets.slint";
 import { AppTheme } from "theme.slint";
 import { FileNameText } from "file-name.slint";
 
+export struct ConversionItem {
+    id: int,
+    path: string,
+    source-info: string,
+    status: string,
+    detail: string,
+}
+
 export component ConversionTab inherits VerticalLayout {
-    in property <string> source;
+    in property <[ConversionItem]> jobs;
     in property <string> output-folder;
     in property <bool> busy;
     in property <bool> other-job-running;
@@ -13,8 +21,14 @@ export component ConversionTab inherits VerticalLayout {
     in-out property <int> format-index;
     in-out property <string> resize-width;
     in-out property <string> resize-height;
-    callback pick-source();
+    callback pick-files();
+    callback pick-folder();
+    callback remove-job(int);
+    callback move-job(int, int);
+    callback clear-list();
+    callback show-result(int);
     callback start();
+    callback retry();
     callback cancel();
 
     padding: 10px;
@@ -30,23 +44,6 @@ export component ConversionTab inherits VerticalLayout {
         VerticalLayout {
             padding: 12px;
             spacing: 10px;
-
-            HorizontalLayout {
-                spacing: 10px;
-                Text { text: "원본 파일"; width: 84px; color: AppTheme.text; vertical-alignment: center; }
-                Rectangle {
-                    horizontal-stretch: 1;
-                    source-hover := TouchArea { }
-                    FileNameText {
-                        width: parent.width;
-                        height: parent.height;
-                        text: root.source != "" ? root.source : "변환할 파일을 선택하거나 이 탭에 놓으세요.";
-                        color: root.source != "" ? AppTheme.text : AppTheme.muted;
-                        hovered: source-hover.has-hover;
-                    }
-                }
-                Button { text: "파일 선택…"; enabled: !root.busy; clicked => { root.pick-source(); } }
-            }
 
             HorizontalLayout {
                 spacing: 10px;
@@ -106,15 +103,104 @@ export component ConversionTab inherits VerticalLayout {
         }
     }
 
+    Rectangle {
+        vertical-stretch: 1;
+        background: AppTheme.surface;
+        border-color: AppTheme.border;
+        border-width: 1px;
+        border-radius: 12px;
+
+        VerticalLayout {
+            padding: 10px;
+            spacing: 8px;
+
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: "변환 대기 목록 (" + root.jobs.length + ")";
+                    color: AppTheme.text;
+                    font-size: 16px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Button { text: "파일 추가"; enabled: !root.busy; clicked => { root.pick-files(); } }
+                Button { text: "폴더 추가"; enabled: !root.busy; clicked => { root.pick-folder(); } }
+                Button { text: "목록 비우기"; enabled: !root.busy && root.jobs.length > 0; clicked => { root.clear-list(); } }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                min-height: 120px;
+                background: AppTheme.subtle-surface;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: AppTheme.separator;
+
+                if root.jobs.length == 0 : Text {
+                    text: "파일이나 폴더를 드래그해서 추가하세요";
+                    color: AppTheme.muted;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                ScrollView {
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 6px;
+                        alignment: LayoutAlignment.start;
+
+                        for job[index] in root.jobs : HorizontalLayout {
+                            spacing: 6px;
+                            Text {
+                                text: job.status;
+                                width: 36px;
+                                color: job.status == "실패" ? AppTheme.end : AppTheme.accent;
+                                vertical-alignment: center;
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 2px;
+                                name-area := TouchArea {
+                                    min-width: 0px;
+                                    height: 20px;
+                                    file-name := FileNameText {
+                                        width: 100%;
+                                        height: 100%;
+                                        text: job.path;
+                                        font-size: 13px;
+                                        hovered: name-area.has-hover;
+                                    }
+                                }
+                                Text {
+                                    text: job.source-info;
+                                    color: AppTheme.muted;
+                                    font-size: 12px;
+                                    overflow: elide;
+                                    min-width: 0px;
+                                }
+                            }
+                            Button { text: "결과"; enabled: !root.busy && job.detail != ""; clicked => { root.show-result(index); } }
+                            Button { text: "↑"; width: 32px; enabled: !root.busy && index > 0; clicked => { root.move-job(index, -1); } }
+                            Button { text: "↓"; width: 32px; enabled: !root.busy && index + 1 < root.jobs.length; clicked => { root.move-job(index, 1); } }
+                            Button { text: "제거"; enabled: !root.busy; clicked => { root.remove-job(index); } }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     HorizontalLayout {
         spacing: 10px;
         Button {
             text: "변환 시작";
             primary: true;
-            enabled: root.source != "" && !root.busy && !root.other-job-running;
+            enabled: root.jobs.length > 0 && !root.busy && !root.other-job-running;
             clicked => { root.start(); }
         }
         Button { text: "취소"; enabled: root.busy; clicked => { root.cancel(); } }
+        Button { text: "실패만 재시도"; enabled: root.jobs.length > 0 && !root.busy && !root.other-job-running; clicked => { root.retry(); } }
         Rectangle { horizontal-stretch: 1; }
     }
 
@@ -132,5 +218,4 @@ export component ConversionTab inherits VerticalLayout {
         height: 112px;
         vertical-stretch: 0;
     }
-    Rectangle { vertical-stretch: 1; }
 }

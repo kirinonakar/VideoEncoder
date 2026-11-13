@@ -330,8 +330,8 @@ async fn real_failure_has_log_and_cancel_stops_silent_process() {
     .unwrap_err();
     let detail = format!("{error:#}");
     assert!(detail.contains("videoencoder_invalid_filter"), "{detail}");
-    assert!(detail.contains("broken_incomplete.mp4"), "{detail}");
     assert!(!dir.0.join("broken.mp4").exists());
+    assert!(!dir.0.join("broken_incomplete.mp4").exists());
     let mut cmd = command(&ffmpeg);
     cmd.args([
         "-v",
@@ -363,4 +363,31 @@ async fn real_failure_has_log_and_cancel_stops_silent_process() {
     .expect("cancellation must not wait for stderr")
     .unwrap_err();
     assert!(error.to_string().contains("취소"));
+
+    let mut cmd = command(&ffmpeg);
+    cmd.args([
+        "-v",
+        "error",
+        "-y",
+        "-re",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=size=16x16:rate=1",
+        "-c:v",
+        "gif",
+    ]);
+    let cancel = Cancel::default();
+    let stop = cancel.clone();
+    let output = dir.0.join("cancel.gif");
+    let error = tokio::time::timeout(
+        Duration::from_secs(3),
+        run_to_output(cmd, &output, 1.0, &cancel, move |_| stop.stop()),
+    )
+    .await
+    .expect("cancellation must stop the encoder")
+    .unwrap_err();
+    assert!(error.to_string().contains("취소"), "{error:#}");
+    assert!(!output.exists());
+    assert!(!dir.0.join("cancel_incomplete.gif").exists());
 }

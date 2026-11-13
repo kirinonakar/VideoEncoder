@@ -2,7 +2,7 @@ import { Button, ComboBox, LineEdit, Slider, HorizontalBox, VerticalBox, Progres
 import { AppTheme } from "theme.slint";
 import { EditorTimeline } from "editor-timeline.slint";
 import { FileNameText, FileNameTooltip, FileNameTooltipLayer } from "file-name.slint";
-import { ConversionTab } from "conversion-tab.slint";
+import { ConversionItem, ConversionTab } from "conversion-tab.slint";
 
 // Custom ComboBox: 긴 파일명은 "…"으로 생략(elide)하고 드롭다운 화살표는 항상 표시한다.
 component VideoFileComboBox {
@@ -275,12 +275,18 @@ export component MainWindow inherits Window {
     in-out property <string> video-info-text: "";
     in-out property <int> selected-index: 0;
 
-    callback pick-conversion-source();
-    callback start-conversion();
+    callback pick-conversion-files();
+    callback pick-conversion-folder();
+    callback conversion-files-dropped(string);
+    callback remove-conversion-job(int);
+    callback move-conversion-job(int, int);
+    callback clear-conversion-list();
+    callback show-conversion-result(int);
+    callback start-conversion(bool);
     callback cancel-conversion();
     in-out property <int> active-tab;
     out property <bool> conversion-tab-active: active-tab == 2;
-    in-out property <string> conversion-source;
+    in-out property <[ConversionItem]> conversion-jobs;
     in-out property <int> conversion-format;
     in-out property <string> conversion-width;
     in-out property <string> conversion-height;
@@ -929,7 +935,7 @@ export component MainWindow inherits Window {
                 title: "변환";
 
                 ConversionTab {
-                    source: root.conversion-source;
+                    jobs: root.conversion-jobs;
                     output-folder: root.output-folder;
                     busy: root.conversion-busy;
                     other-job-running: root.is-encoding || root.edit-busy;
@@ -939,8 +945,14 @@ export component MainWindow inherits Window {
                     format-index <=> root.conversion-format;
                     resize-width <=> root.conversion-width;
                     resize-height <=> root.conversion-height;
-                    pick-source => { root.pick-conversion-source(); }
-                    start => { root.start-conversion(); }
+                    pick-files => { root.pick-conversion-files(); }
+                    pick-folder => { root.pick-conversion-folder(); }
+                    remove-job(index) => { root.remove-conversion-job(index); }
+                    move-job(index, delta) => { root.move-conversion-job(index, delta); }
+                    clear-list => { root.clear-conversion-list(); }
+                    show-result(index) => { root.show-conversion-result(index); }
+                    start => { root.start-conversion(false); }
+                    retry => { root.start-conversion(true); }
                     cancel => { root.cancel-conversion(); }
                 }
             }

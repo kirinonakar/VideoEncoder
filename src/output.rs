@@ -102,7 +102,7 @@ impl OutputFile {
         for n in 0..10_000 {
             let output = numbered(&self.requested, n);
             // The no-replace operation also protects against names created
-            // concurrently after the encode started. Errors preserve the temp.
+            // concurrently after the encode started.
             match publish_no_replace(&self.incomplete, &output) {
                 Ok(()) => return Ok(output),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -113,6 +113,13 @@ impl OutputFile {
             io::ErrorKind::AlreadyExists,
             "출력 파일 이름을 확보할 수 없습니다",
         ))
+    }
+
+    pub fn discard(&self) -> io::Result<()> {
+        match fs::remove_file(&self.incomplete) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            result => result,
+        }
     }
 }
 

@@ -94,6 +94,10 @@ async fn converts_all_formats_with_resize_and_preserves_animation() {
     );
 
     let cancel = Cancel::default();
+    assert_eq!(
+        source_info(&ffmpeg, &src, &cancel).await.unwrap(),
+        "160 × 120 px · 00:00:01.500"
+    );
     for (format, width, height, size) in [
         (AnimationFormat::Gif, "", "", (160, 120)),
         (AnimationFormat::Webp, "79", "", (79, 59)),
@@ -108,6 +112,16 @@ async fn converts_all_formats_with_resize_and_preserves_animation() {
         let path = job.run(&ffmpeg, &cancel, |_| {}).await.unwrap();
         assert_eq!(path, folder.join(format!("원본.{}", format.extension())));
         check_frames(&ffmpeg, &path, size, 12).await;
+        let info = source_info(&ffmpeg, &path, &cancel).await.unwrap();
+        assert!(
+            info.starts_with(&format!("{} × {} px · 00:00:01.", size.0, size.1)),
+            "{info}"
+        );
+        if matches!(format, AnimationFormat::Webp) {
+            let bytes = fs::read(&path).unwrap();
+            assert!(bytes.windows(4).any(|chunk| chunk == b"VP8 "));
+            assert!(!bytes.windows(4).any(|chunk| chunk == b"VP8L"));
+        }
     }
 
     let avif = folder.join("원본.avif");

@@ -56,7 +56,7 @@ Download the latest build from the [Releases Page](https://github.com/kirinonaka
 -   **All Audio Tracks**: On keeps every audio stream; off keeps only the first.
 -   **Preserve Subtitles**: Copies text subtitles (`mov_text` for MP4); incompatible subtitle codecs in MP4 are reported as an error instead of being silently dropped.
 -   **MP4 Compatibility**: Audio codecs that MP4 players commonly reject (DTS, FLAC, Opus, Vorbis, …) are re-encoded to AAC; AAC, MP3, AC-3, E-AC-3 and ALAC are copied.
--   **Incomplete Outputs**: Files are written under a temporary name and renamed on success, so failed jobs never leave a usable-looking result.
+-   **Incomplete Outputs**: Files are written under a temporary name, renamed on success, and cleaned up when a job fails or is cancelled.
 
 ## Settings & Presets
 
@@ -78,7 +78,7 @@ Download the latest build from the [Releases Page](https://github.com/kirinonaka
 
 ## Animation Conversion
 
--   In **Convert**, select or drop a source file and choose **Animated GIF**, **Animated WebP**, or **Animated AVIF**.
+-   In **Convert**, add files or a folder to the queue, then choose **Animated GIF**, **Animated WebP**, or **Animated AVIF** for the batch. Each file shows its source resolution and playback duration under the filename.
 -   Leave both size fields blank for the original resolution. Enter one dimension in pixels to preserve the aspect ratio, or enter both for an exact size.
 -   Conversion uses the **Output Folder** from the encoding tab. A blank folder saves next to the source. Outputs use the source name with the selected extension, adding a number if the name is taken.
 -   WebP output requires `libwebp_anim`, and AVIF output requires `libaom-av1` and the AVIF muxer. Animated WebP input requires an FFmpeg build with an animated WebP decoder.
