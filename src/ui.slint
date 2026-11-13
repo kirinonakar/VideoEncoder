@@ -193,6 +193,7 @@ export component MainWindow inherits Window {
     changed dark-mode => {
         Palette.color-scheme = root.dark-mode ? ColorScheme.dark : ColorScheme.light;
         native-theme-changed();
+        preset-options-changed();
     }
 
     // Callbacks to Rust
@@ -208,9 +209,10 @@ export component MainWindow inherits Window {
     callback remove-job(int);
     callback move-job(int, int);
     callback retry-failed();
-    callback save-settings();
     callback save-preset();
     callback select-preset(int);
+    callback delete-preset();
+    callback preset-options-changed();
     callback cancel-edit();
     in-out property <[JobItem]> job-list;
     in-out property <LocalizedText> error-details;
@@ -304,7 +306,19 @@ export component MainWindow inherits Window {
     in-out property <LocalizedText> conversion-status;
     in-out property <LocalizedText> conversion-detail;
 
-    changed conversion-format => { conversion-options-changed(); }
+    changed ffmpeg-path => { preset-options-changed(); }
+    changed output-suffix => { preset-options-changed(); }
+    changed encoder-index => { preset-options-changed(); }
+    changed crf-value => { preset-options-changed(); }
+    changed cq-value => { preset-options-changed(); }
+    changed output-folder => { preset-options-changed(); }
+    changed all-audio => { preset-options-changed(); }
+    changed preserve-subtitles => { preset-options-changed(); }
+    changed cut-mode => { preset-options-changed(); }
+    changed conversion-format => {
+        conversion-options-changed();
+        preset-options-changed();
+    }
     changed conversion-width => { conversion-options-changed(); }
     changed conversion-height => { conversion-options-changed(); }
 
@@ -451,18 +465,13 @@ export component MainWindow inherits Window {
                 }
 
                 HorizontalLayout {
-                    alignment: start;
+                    spacing: 12px;
                     Button {
                         enabled: !is-encoding && !edit-busy;
                         text: AppLanguage.tr("Reset options", "옵션 초기화");
                         clicked => { reset-options(); }
                     }
-                    Button { text: AppLanguage.tr("Save settings", "설정 저장"); clicked => { save-settings(); } }
-                }
-
-                HorizontalLayout {
-                    spacing: 12px;
-                    Text { text: AppLanguage.tr("Preset:", "프리셋:"); color: AppTheme.text; vertical-alignment: center; width: 100px; font-weight: 500; }
+                    Text { text: AppLanguage.tr("Preset:", "프리셋:"); color: AppTheme.text; vertical-alignment: center; font-weight: 500; }
                     ComboBox {
                         accessible-label: AppLanguage.tr("Preset", "프리셋");
                         model: root.preset-names;
@@ -481,6 +490,12 @@ export component MainWindow inherits Window {
                         text: AppLanguage.tr("Save preset", "프리셋 저장");
                         enabled: root.preset-options-enabled && root.preset-name != "";
                         clicked => { root.save-preset(); }
+                    }
+                    Button {
+                        text: AppLanguage.tr("Delete", "삭제");
+                        accessible-label: AppLanguage.tr("Delete preset", "프리셋 삭제");
+                        enabled: root.preset-options-enabled && root.preset-index > 0;
+                        clicked => { root.delete-preset(); }
                     }
                 }
             }

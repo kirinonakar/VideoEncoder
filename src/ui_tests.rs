@@ -70,7 +70,7 @@ fn render_dropped_files() {
     settings::setup(&ui, settings_path.clone());
     assert_eq!(Language::current(&ui), Language::system());
     std::fs::write(&settings_path, r#"{"encoder":0,"language":"EN"}"#).unwrap();
-    settings::setup(&ui, settings_path.clone());
+    let settings = settings::setup(&ui, settings_path.clone());
     assert_eq!(Language::current(&ui), Language::En);
     let workers = Arc::new(Mutex::new(Vec::new()));
     let queue = Queue::new(&ui, Cancel::default(), workers.clone());
@@ -119,7 +119,7 @@ fn render_dropped_files() {
     assert_eq!(ui.get_conversion_format(), 2);
     assert!(!ui.get_dark_mode());
     ui.set_conversion_format(1);
-    ui.invoke_save_settings();
+    settings.save(&ui).unwrap();
     let saved: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&settings_path).unwrap()).unwrap();
     assert_eq!(saved["language"], "KO");
@@ -201,6 +201,7 @@ fn check_named_presets(ui: &MainWindow, path: &Path) {
     let read_settings =
         || -> serde_json::Value { serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap() };
     let settings = settings::setup(ui, path.to_owned());
+    slint::platform::update_timers_and_animations();
     ui.set_korean(false);
     ui.set_encoder_index(0);
     ui.set_crf_value(24.0);
@@ -208,7 +209,9 @@ fn check_named_presets(ui: &MainWindow, path: &Path) {
     ui.set_conversion_format(1);
     ui.set_preset_name("  고화질  ".into());
     ui.invoke_save_preset();
+    slint::platform::update_timers_and_animations();
     assert_eq!(ui.get_preset_index(), 1);
+    assert_eq!(ui.get_preset_names().row_data(0).unwrap(), "-");
     assert_eq!(ui.get_preset_names().row_data(1).unwrap(), "고화질");
     assert_eq!(read_settings()["presets"][0]["options"]["crf"], 24.0);
 
@@ -216,11 +219,14 @@ fn check_named_presets(ui: &MainWindow, path: &Path) {
     ui.set_cq_value(28.0);
     ui.set_preset_name("NVENC".into());
     ui.invoke_save_preset();
+    slint::platform::update_timers_and_animations();
     assert_eq!(ui.get_preset_index(), 2);
     assert_eq!(ui.get_preset_names().row_count(), 3);
 
     ui.set_korean(true);
     ui.invoke_select_preset(1);
+    slint::platform::update_timers_and_animations();
+    assert_eq!(ui.get_preset_index(), 1);
     assert!(ui.get_korean());
     assert_eq!(ui.get_encoder_index(), 0);
     assert_eq!(ui.get_output_suffix(), "_cpu");
@@ -228,22 +234,62 @@ fn check_named_presets(ui: &MainWindow, path: &Path) {
     assert_eq!(ui.get_preset_name(), "고화질");
 
     ui.set_crf_value(22.0);
+    slint::platform::update_timers_and_animations();
+    assert_eq!(ui.get_preset_index(), 0);
+    assert_eq!(ui.get_preset_name(), "고화질");
+    ui.invoke_delete_preset();
+    assert_eq!(ui.get_preset_names().row_count(), 3);
+
     ui.invoke_save_preset();
+    slint::platform::update_timers_and_animations();
+    assert_eq!(ui.get_preset_index(), 1);
     assert_eq!(ui.get_preset_names().row_count(), 3);
     assert_eq!(read_settings()["presets"][0]["options"]["crf"], 22.0);
 
     ui.set_crf_value(31.0);
-    ui.invoke_save_settings();
-    assert_eq!(read_settings()["presets"].as_array().unwrap().len(), 2);
     settings.save(ui).unwrap();
+    assert_eq!(read_settings()["presets"].as_array().unwrap().len(), 2);
     settings::setup(ui, path.to_owned());
+    slint::platform::update_timers_and_animations();
     assert_eq!(ui.get_crf_value(), 31.0);
     assert_eq!(ui.get_preset_names().row_data(2).unwrap(), "NVENC");
     ui.invoke_select_preset(1);
     assert_eq!(ui.get_crf_value(), 22.0);
     ui.invoke_select_preset(2);
+    slint::platform::update_timers_and_animations();
+    assert_eq!(ui.get_preset_index(), 2);
     assert_eq!(ui.get_encoder_index(), 1);
     assert_eq!(ui.get_cq_value(), 28.0);
+
+    ui.set_conversion_format(0);
+    slint::platform::update_timers_and_animations();
+    assert_eq!(ui.get_preset_index(), 0);
+    ui.invoke_select_preset(1);
+    slint::platform::update_timers_and_animations();
+    assert_eq!(ui.get_preset_index(), 1);
+    ui.invoke_reset_options();
+    slint::platform::update_timers_and_animations();
+    assert_eq!(ui.get_preset_index(), 0);
+
+    ui.invoke_select_preset(1);
+    slint::platform::update_timers_and_animations();
+    ui.invoke_delete_preset();
+    assert_eq!(ui.get_preset_index(), 0);
+    assert!(ui.get_preset_name().is_empty());
+    assert_eq!(ui.get_crf_value(), 22.0);
+    assert_eq!(ui.get_preset_names().row_data(1).unwrap(), "NVENC");
+    let saved = read_settings();
+    assert_eq!(saved["presets"].as_array().unwrap().len(), 1);
+    assert_eq!(saved["presets"][0]["name"], "NVENC");
+
+    settings::setup(ui, path.to_owned());
+    slint::platform::update_timers_and_animations();
+    assert_eq!(ui.get_preset_names().row_count(), 2);
+    ui.invoke_select_preset(1);
+    assert_eq!(ui.get_cq_value(), 28.0);
+    ui.invoke_delete_preset();
+    assert_eq!(ui.get_preset_names().row_count(), 1);
+    assert!(read_settings().get("presets").is_none());
 }
 
 fn check_conversion_batch(ui: &MainWindow, events: &mpsc::Receiver<Event>) {

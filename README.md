@@ -62,7 +62,6 @@ Download the latest build from the [Releases Page](https://github.com/kirinonaka
 ## Settings & Presets
 
 -   Settings are loaded at startup and saved automatically on exit to `%APPDATA%\VideoEncoder\settings.json` (`~/.config/VideoEncoder/settings.json` on other platforms).
--   **Save Settings** writes the current state immediately.
 -   In **Encode**, enter a preset name and click **Save preset** to store the current options in `settings.json`. Saving with an existing name updates that preset.
 -   Choose a preset from the dropdown to apply its FFmpeg path, encoder, quality, suffix, output folder, track options, cut mode, theme, and conversion format.
 -   **Language** (Korean / English) is saved as an app setting and restored at launch.

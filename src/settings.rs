@@ -29,7 +29,7 @@ struct NamedPreset {
     options: Options,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 struct Options {
     ffmpeg: String,
@@ -148,6 +148,7 @@ impl Options {
 pub struct SettingsFile {
     path: PathBuf,
     presets: RefCell<Vec<NamedPreset>>,
+    selected_options: RefCell<Option<Options>>,
 }
 
 impl SettingsFile {
@@ -172,9 +173,31 @@ impl SettingsFile {
             settings.presets.push(preset);
             settings.presets.len() - 1
         };
+        self.write_presets(settings)?;
+        Ok(index)
+    }
+
+    fn delete_preset(&self, ui: &MainWindow, index: usize) -> Result<Option<String>> {
+        let mut settings = Settings::capture(ui, self.presets.borrow().clone());
+        if index >= settings.presets.len() {
+            return Ok(None);
+        }
+        let removed = settings.presets.remove(index);
+        self.write_presets(settings)?;
+        Ok(Some(removed.name))
+    }
+
+    fn write_presets(&self, settings: Settings) -> Result<()> {
         settings.save(&self.path)?;
         *self.presets.borrow_mut() = settings.presets;
-        Ok(index)
+        Ok(())
+    }
+
+    fn mark_selected(&self, ui: &MainWindow, row: i32, name: &str) {
+        // Slint can deliver option changes after the selection callback returns.
+        *self.selected_options.borrow_mut() = Some(Options::capture(ui));
+        ui.set_preset_name(name.into());
+        ui.set_preset_index(row);
     }
 }
 pub fn tracks(ui: &MainWindow) -> Tracks {
@@ -248,7 +271,7 @@ pub fn setup(ui: &MainWindow, path: PathBuf) -> Rc<SettingsFile> {
         }
     });
     let names = Rc::new(VecModel::from(
-        std::iter::once("—".into())
+        std::iter::once("-".into())
             .chain(
                 settings
                     .presets
@@ -258,30 +281,17 @@ pub fn setup(ui: &MainWindow, path: PathBuf) -> Rc<SettingsFile> {
             .collect::<Vec<_>>(),
     ));
     ui.set_preset_names(names.clone().into());
+    ui.set_preset_index(0);
+    ui.set_preset_name("".into());
     let file = Rc::new(SettingsFile {
         path,
         presets: RefCell::new(settings.presets),
+        selected_options: RefCell::new(None),
     });
 
     let weak = ui.as_weak();
     let settings = file.clone();
-    ui.on_save_settings(move || {
-        if let Some(ui) = weak.upgrade() {
-            ui.set_current_file_text(match settings.save(&ui) {
-                Ok(()) => message!(
-                    "Settings saved: {}",
-                    "설정 저장: {}",
-                    settings.path.display()
-                ),
-                Err(error) => diagnostic(
-                    &error.context(message!("Could not save settings", "설정 저장 실패")),
-                ),
-            });
-        }
-    });
-
-    let weak = ui.as_weak();
-    let settings = file.clone();
+    let save_names = names.clone();
     ui.on_save_preset(move || {
         if let Some(ui) = weak.upgrade() {
             if !ui.get_preset_options_enabled() {
@@ -299,11 +309,10 @@ pub fn setup(ui: &MainWindow, path: PathBuf) -> Rc<SettingsFile> {
             ui.set_current_file_text(match settings.save_preset(&ui, name) {
                 Ok(index) => {
                     let row = index + 1;
-                    if row == names.row_count() {
-                        names.push(name.into());
+                    if row == save_names.row_count() {
+                        save_names.push(name.into());
                     }
-                    ui.set_preset_index(row as i32);
-                    ui.set_preset_name(name.into());
+                    settings.mark_selected(&ui, row as i32, name);
                     message!("Preset saved: {}", "프리셋 저장 완료: {}", name)
                 }
                 Err(error) => diagnostic(
@@ -321,18 +330,54 @@ pub fn setup(ui: &MainWindow, path: PathBuf) -> Rc<SettingsFile> {
                 return;
             }
             if row <= 0 {
+                ui.set_preset_index(0);
                 ui.set_preset_name("".into());
                 return;
             }
             if let Some(preset) = settings.presets.borrow().get(row as usize - 1) {
                 preset.options.apply(&ui);
-                ui.set_preset_name(preset.name.as_str().into());
+                settings.mark_selected(&ui, row, &preset.name);
                 ui.set_current_file_text(message!(
                     "Preset loaded: {}",
                     "프리셋 불러오기 완료: {}",
                     preset.name
                 ));
             }
+        }
+    });
+
+    let weak = ui.as_weak();
+    let settings = file.clone();
+    ui.on_preset_options_changed(move || {
+        if let Some(ui) = weak.upgrade() {
+            if ui.get_preset_index() > 0
+                && settings.selected_options.borrow().as_ref() != Some(&Options::capture(&ui))
+            {
+                ui.set_preset_index(0);
+            }
+        }
+    });
+
+    let weak = ui.as_weak();
+    let settings = file.clone();
+    ui.on_delete_preset(move || {
+        if let Some(ui) = weak.upgrade() {
+            let row = ui.get_preset_index();
+            if !ui.get_preset_options_enabled() || row <= 0 {
+                return;
+            }
+            ui.set_current_file_text(match settings.delete_preset(&ui, row as usize - 1) {
+                Ok(Some(name)) => {
+                    ui.set_preset_index(0);
+                    ui.set_preset_name("".into());
+                    names.remove(row as usize);
+                    message!("Preset deleted: {}", "프리셋 삭제 완료: {}", name)
+                }
+                Ok(None) => return,
+                Err(error) => diagnostic(
+                    &error.context(message!("Could not delete preset", "프리셋 삭제 실패")),
+                ),
+            });
         }
     });
     file
