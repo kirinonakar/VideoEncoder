@@ -7,6 +7,7 @@ A lightweight, high-performance video encoding GUI built with **Rust** and **Sli
 ## Key Features
 
 -   **Light / Dark Theme**: Toggle at the right of the title; the native title bar follows the theme.
+-   **Multilingual UI (Korean / English)**: The **KO / EN** button left of the theme toggle switches the whole interface instantly. The first launch follows the Windows display language.
 -   **Native Windows Drag & Drop**: Drop files and folders anywhere on the window.
 -   **Selectable Encoder**: NVIDIA NVENC (H.265, default) or x265 (CPU). The quality slider switches between CQ and CRF automatically, and each encoder keeps its own value.
 -   **Batch Queue**: Add files or folders, see the source resolution and playback duration under each file, reorder with ↑/↓, remove single items, clear the list, and retry only the failed jobs.
@@ -63,6 +64,7 @@ Download the latest build from the [Releases Page](https://github.com/kirinonaka
 -   Settings are loaded at startup and saved automatically on exit to `%APPDATA%\VideoEncoder\settings.json` (`~/.config/VideoEncoder/settings.json` on other platforms).
 -   **Save Settings** writes the current state immediately.
 -   **Export / Import Preset** stores every option (FFmpeg path, encoder, quality, suffix, output folder, track options, cut mode, theme) in a JSON file.
+-   **Language** (Korean / English) is saved with the settings file and restored at launch. Exported presets do not include it, so importing a preset never changes the current language.
 -   Older or partial JSON presets remain readable; missing values fall back to defaults.
 
 ## Video Editor (Trim / Cut / Crop)
