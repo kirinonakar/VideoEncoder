@@ -9,7 +9,7 @@ A lightweight, high-performance video encoding GUI built with **Rust** and **Sli
 -   **Light / Dark Theme**: Toggle at the right of the title; the native title bar follows the theme.
 -   **Native Windows Drag & Drop**: Drop files and folders anywhere on the window.
 -   **Selectable Encoder**: NVIDIA NVENC (H.265, default) or x265 (CPU). The quality slider switches between CQ and CRF automatically, and each encoder keeps its own value.
--   **Batch Queue**: Add files or folders, reorder with ↑/↓, remove single items, clear the list, and retry only the failed jobs.
+-   **Batch Queue**: Add files or folders, see the source resolution and playback duration under each file, reorder with ↑/↓, remove single items, clear the list, and retry only the failed jobs.
 -   **Detailed Progress**: Per-file and overall percentage, encoding speed (x), live bitrate, and Windows taskbar progress.
 -   **Audio / Subtitle Tracks**: Keep all audio tracks or only the first, and optionally preserve subtitles.
 -   **Persistent Settings & Presets**: Options are restored at launch and saved on exit; presets can be exported and imported as JSON.

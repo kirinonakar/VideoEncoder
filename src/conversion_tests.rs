@@ -1,6 +1,7 @@
 use super::*;
+use crate::probe::source_info;
 use serde_json::Value;
-use std::{fs, process::Output};
+use std::{fs, path::Path, process::Output};
 
 fn check_output(result: Output) -> Output {
     assert!(

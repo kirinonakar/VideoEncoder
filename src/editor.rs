@@ -119,41 +119,35 @@ pub fn setup(
             if ui.get_is_encoding() || ui.get_edit_busy() {
                 return;
             }
-            let paths: Vec<&str> = paths_str.split('|').collect();
-            let mut added = 0;
-            let mut first_video: Option<(PathBuf, usize)> = None;
-            for p_str in paths {
+            let mut files = Vec::new();
+            for p_str in paths_str.split('|') {
                 let path = PathBuf::from(p_str);
                 if path.is_dir() {
                     if let Ok(entries) = std::fs::read_dir(&path) {
-                        for entry in entries.flatten() {
-                            let p = entry.path();
-                            if is_video_file(&p) {
-                                if first_video.is_none() {
-                                    first_video = Some((p.clone(), model.row_count()));
-                                }
-                                queue.add(&p);
-                                added += 1;
-                            }
-                        }
+                        files.extend(
+                            entries
+                                .flatten()
+                                .map(|entry| entry.path())
+                                .filter(|p| is_video_file(p)),
+                        );
                     }
                 } else if is_video_file(&path) {
-                    if first_video.is_none() {
-                        first_video = Some((path.clone(), model.row_count()));
-                    }
-                    queue.add(&path);
-                    added += 1;
+                    files.push(path);
                 }
             }
+            let first_video = files.first().cloned();
+            let first_index = model.row_count();
+            let added = files.len();
+            queue.add_files(&ui, files);
             if let Some(ui) = weak.upgrade() {
                 ui.set_current_file_text(format!("{} items added", added).into());
-                if let Some((p, idx)) = first_video {
+                if let Some(p) = first_video {
                     let ffmpeg = ui.get_ffmpeg_path().to_string();
                     if ffmpeg.is_empty() {
                         ui.set_edit_status_text("먼저 FFmpeg 경로를 설정하세요.".into());
                     } else {
                         ui.set_current_video_path(p.to_string_lossy().to_string().into());
-                        ui.set_selected_index(idx as i32);
+                        ui.set_selected_index(first_index as i32);
                         ui.set_edit_status_text("비디오 정보를 읽는 중...".into());
                         load_video_async(weak.clone(), requester.clone(), ffmpeg, p);
                     }
@@ -197,7 +191,7 @@ pub fn setup(
                         }
                     }
                     if idx < 0 {
-                        queue.add(&path);
+                        queue.add_files(&ui, vec![path.clone()]);
                         idx = (model.row_count() - 1) as i32;
                     }
                     ui.set_selected_index(idx);

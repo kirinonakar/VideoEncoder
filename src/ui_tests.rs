@@ -59,8 +59,8 @@ fn render_dropped_files() {
     let (send, events) = mpsc::channel();
     slint::platform::set_platform(Box::new(HeadlessPlatform(window.clone(), send))).unwrap();
     let ui = MainWindow::new().unwrap();
-    let queue = Queue::new(&ui);
     let workers = Arc::new(Mutex::new(Vec::new()));
+    let queue = Queue::new(&ui, Cancel::default(), workers.clone());
     let taskbar = TaskbarProgress::new();
     conversion::setup(
         &ui,
@@ -172,6 +172,28 @@ fn check_conversion_batch(ui: &MainWindow, events: &mpsc::Receiver<Event>) {
     }
     let invalid = scratch.0.join("invalid.mkv");
     std::fs::write(&invalid, []).unwrap();
+    ui.set_active_tab(0);
+    ui.invoke_files_dropped(format!("{}|{}", sources[0].display(), sources[1].display()).into());
+    let encoding_jobs = ui.get_job_list();
+    assert_eq!(encoding_jobs.row_count(), 2);
+    ui.invoke_move_job(0, 1);
+    while encoding_jobs
+        .iter()
+        .any(|job| job.source_info == "원본 정보 읽는 중…")
+    {
+        events
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()();
+    }
+    assert_eq!(
+        encoding_jobs.row_data(0).unwrap().source_info,
+        "64 × 48 px · 00:00:00.400"
+    );
+    assert_eq!(
+        encoding_jobs.row_data(1).unwrap().source_info,
+        "96 × 64 px · 00:00:00.400"
+    );
+    ui.set_active_tab(2);
     ui.set_conversion_height("".into());
     ui.set_conversion_width("48".into());
     ui.set_output_folder(scratch.0.to_string_lossy().as_ref().into());
@@ -187,7 +209,10 @@ fn check_conversion_batch(ui: &MainWindow, events: &mpsc::Receiver<Event>) {
     let jobs = ui.get_conversion_jobs();
     assert_eq!(jobs.row_count(), 3);
     ui.invoke_move_conversion_job(2, -1);
-    for _ in 0..3 {
+    while jobs
+        .iter()
+        .any(|job| job.source_info == "원본 정보 읽는 중…")
+    {
         events
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap()();
@@ -213,4 +238,31 @@ fn check_conversion_batch(ui: &MainWindow, events: &mpsc::Receiver<Event>) {
     assert_eq!(jobs.row_data(2).unwrap().status, "완료");
     assert!(scratch.0.join("first.gif").is_file());
     assert!(scratch.0.join("second.gif").is_file());
+
+    slint::platform::update_timers_and_animations();
+    assert_eq!(jobs.row_data(0).unwrap().status, "완료");
+    for change_option in [
+        (|ui: &MainWindow| ui.set_conversion_format(2)) as fn(&MainWindow),
+        |ui| ui.set_conversion_width("40".into()),
+        |ui| ui.set_conversion_height("32".into()),
+    ] {
+        change_option(ui);
+        slint::platform::update_timers_and_animations();
+        assert_eq!(jobs.row_data(0).unwrap().status, "대기");
+        assert!(jobs.row_data(0).unwrap().detail.is_empty());
+        assert_eq!(jobs.row_data(1).unwrap().status, "실패");
+        assert_eq!(jobs.row_data(2).unwrap().status, "대기");
+        assert_eq!(ui.get_conversion_progress(), 0.0);
+        ui.invoke_start_conversion(false);
+        assert!(ui.get_conversion_busy());
+        while ui.get_conversion_busy() {
+            events
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap()();
+        }
+        assert_eq!(jobs.row_data(0).unwrap().status, "완료");
+        assert_eq!(jobs.row_data(2).unwrap().status, "완료");
+    }
+    assert!(scratch.0.join("first.avif").is_file());
+    assert!(scratch.0.join("first (2).avif").is_file());
 }

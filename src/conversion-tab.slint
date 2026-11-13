@@ -1,6 +1,6 @@
 import { Button, ComboBox, LineEdit, ProgressIndicator, ScrollView, TextEdit } from "std-widgets.slint";
 import { AppTheme } from "theme.slint";
-import { FileNameText } from "file-name.slint";
+import { FileNameText, QueueSource } from "file-name.slint";
 
 export struct ConversionItem {
     id: int,
@@ -158,27 +158,9 @@ export component ConversionTab inherits VerticalLayout {
                                 color: job.status == "실패" ? AppTheme.end : AppTheme.accent;
                                 vertical-alignment: center;
                             }
-                            VerticalLayout {
-                                horizontal-stretch: 1;
-                                spacing: 2px;
-                                name-area := TouchArea {
-                                    min-width: 0px;
-                                    height: 20px;
-                                    file-name := FileNameText {
-                                        width: 100%;
-                                        height: 100%;
-                                        text: job.path;
-                                        font-size: 13px;
-                                        hovered: name-area.has-hover;
-                                    }
-                                }
-                                Text {
-                                    text: job.source-info;
-                                    color: AppTheme.muted;
-                                    font-size: 12px;
-                                    overflow: elide;
-                                    min-width: 0px;
-                                }
+                            QueueSource {
+                                path: job.path;
+                                info: job.source-info;
                             }
                             Button { text: "결과"; enabled: !root.busy && job.detail != ""; clicked => { root.show-result(index); } }
                             Button { text: "↑"; width: 32px; enabled: !root.busy && index > 0; clicked => { root.move-job(index, -1); } }

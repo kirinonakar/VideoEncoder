@@ -1,6 +1,6 @@
-use super::{AnimationFormat, Cancel, ConversionJob, Resize, SOURCE_EXTENSIONS, source_info};
-use crate::{ConversionItem, MainWindow, windows::TaskbarProgress};
-use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use super::{AnimationFormat, Cancel, ConversionJob, Resize, SOURCE_EXTENSIONS};
+use crate::{ConversionItem, MainWindow, probe::source_info, windows::TaskbarProgress};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::{
     cell::Cell,
     fs,
@@ -17,6 +17,24 @@ struct Queue {
     next_id: Cell<i32>,
     probe_cancel: Cancel,
     workers: Workers,
+    completed_options: Cell<Option<OutputOptions>>,
+}
+
+#[derive(PartialEq, Eq)]
+struct OutputOptions {
+    format: i32,
+    width: SharedString,
+    height: SharedString,
+}
+
+impl OutputOptions {
+    fn read(ui: &MainWindow) -> Self {
+        Self {
+            format: ui.get_conversion_format(),
+            width: ui.get_conversion_width(),
+            height: ui.get_conversion_height(),
+        }
+    }
 }
 
 fn update_job(ui: &MainWindow, id: i32, update: impl FnOnce(&mut ConversionItem)) {
@@ -56,6 +74,32 @@ fn track(workers: &Workers, worker: JoinHandle<()>) {
 }
 
 impl Queue {
+    fn requeue_completed(&self, ui: &MainWindow) {
+        let Some(completed_options) = self.completed_options.take() else {
+            return;
+        };
+        if completed_options == OutputOptions::read(ui) {
+            self.completed_options.set(Some(completed_options));
+            return;
+        }
+        let mut changed = false;
+        for (index, mut job) in self.jobs.iter().enumerate() {
+            if job.status == "완료" {
+                job.status = "대기".into();
+                job.detail = "".into();
+                self.jobs.set_row_data(index, job);
+                changed = true;
+            }
+        }
+        if changed {
+            ui.set_conversion_status(
+                "출력 설정이 변경되어 완료 파일을 대기 목록으로 돌렸습니다.".into(),
+            );
+            ui.set_conversion_detail("".into());
+            ui.set_conversion_progress(0.0);
+        }
+    }
+
     fn add(&self, ui: &MainWindow, paths: Vec<PathBuf>) {
         if paths.is_empty() {
             ui.set_conversion_status("추가할 동영상이나 애니메이션 파일이 없습니다.".into());
@@ -110,18 +154,17 @@ impl Queue {
         if ui.get_conversion_busy() || ui.get_is_encoding() || ui.get_edit_busy() {
             return;
         }
+        self.requeue_completed(ui);
         ui.set_conversion_detail("".into());
         let ffmpeg = ui.get_ffmpeg_path().to_string();
         if ffmpeg.is_empty() {
             ui.set_conversion_status("인코딩 탭에서 FFmpeg 경로를 설정하세요.".into());
             return;
         }
-        let settings = AnimationFormat::from_index(ui.get_conversion_format()).and_then(|format| {
-            Resize::parse(
-                ui.get_conversion_width().as_str(),
-                ui.get_conversion_height().as_str(),
-            )
-            .map(|resize| (format, resize))
+        let options = OutputOptions::read(ui);
+        let settings = AnimationFormat::from_index(options.format).and_then(|format| {
+            Resize::parse(options.width.as_str(), options.height.as_str())
+                .map(|resize| (format, resize))
         });
         let (format, resize) = match settings {
             Ok(settings) => settings,
@@ -164,6 +207,7 @@ impl Queue {
             });
         }
         cancel.reset();
+        self.completed_options.set(Some(options));
         ui.set_conversion_progress(0.0);
         ui.set_conversion_busy(true);
         ui.set_conversion_status("변환 중…".into());
@@ -252,8 +296,17 @@ pub fn setup(
         next_id: Cell::new(0),
         probe_cancel,
         workers,
+        completed_options: Cell::new(None),
     });
     ui.set_conversion_jobs(ModelRc::from(queue.jobs.clone()));
+
+    let weak = ui.as_weak();
+    let q = queue.clone();
+    ui.on_conversion_options_changed(move || {
+        if let Some(ui) = weak.upgrade().filter(|ui| !ui.get_conversion_busy()) {
+            q.requeue_completed(&ui);
+        }
+    });
 
     let weak = ui.as_weak();
     let q = queue.clone();

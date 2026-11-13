@@ -1,7 +1,7 @@
 import { Button, ComboBox, LineEdit, Slider, HorizontalBox, VerticalBox, ProgressIndicator, ScrollView, CheckBox, TabWidget, Palette } from "std-widgets.slint";
 import { AppTheme } from "theme.slint";
 import { EditorTimeline } from "editor-timeline.slint";
-import { FileNameText, FileNameTooltip, FileNameTooltipLayer } from "file-name.slint";
+import { FileNameText, FileNameTooltip, FileNameTooltipLayer, QueueSource } from "file-name.slint";
 import { ConversionItem, ConversionTab } from "conversion-tab.slint";
 
 // Custom ComboBox: 긴 파일명은 "…"으로 생략(elide)하고 드롭다운 화살표는 항상 표시한다.
@@ -172,7 +172,7 @@ component VideoFileComboBox {
     }
 }
 
-export struct JobItem { path: string, status: string, detail: string }
+export struct JobItem { id: int, path: string, source-info: string, status: string, detail: string }
 
 export component MainWindow inherits Window {
     title: "VideoEncoder FFmpeg Wrapper";
@@ -282,6 +282,7 @@ export component MainWindow inherits Window {
     callback move-conversion-job(int, int);
     callback clear-conversion-list();
     callback show-conversion-result(int);
+    callback conversion-options-changed();
     callback start-conversion(bool);
     callback cancel-conversion();
     in-out property <int> active-tab;
@@ -294,6 +295,10 @@ export component MainWindow inherits Window {
     in-out property <float> conversion-progress;
     in-out property <string> conversion-status;
     in-out property <string> conversion-detail;
+
+    changed conversion-format => { conversion-options-changed(); }
+    changed conversion-width => { conversion-options-changed(); }
+    changed conversion-height => { conversion-options-changed(); }
 
     VerticalBox {
         padding: 16px;
@@ -490,17 +495,9 @@ export component MainWindow inherits Window {
                             for job[index] in job-list : HorizontalLayout {
                                 spacing: 6px;
                                 Text { text: job.status; color: job.status == "실패" ? #d33f49 : AppTheme.accent; width: 36px; vertical-alignment: center; font-family: "Noto Sans CJK JP"; }
-                                file-name-area := TouchArea {
-                                    min-width: 0px;
-                                    horizontal-stretch: 1;
-                                    min-height: file-name.preferred-height;
-                                    file-name := FileNameText {
-                                        width: 100%;
-                                        height: 100%;
-                                        text: job.path;
-                                        font-size: 13px;
-                                        hovered: file-name-area.has-hover && !file-name-area.pressed;
-                                    }
+                                QueueSource {
+                                    path: job.path;
+                                    info: job.source-info;
                                 }
                                 Button { text: "↑"; width: 32px; enabled: !is-encoding && index > 0; clicked => { move-job(index, -1); } }
                                 Button { text: "↓"; width: 32px; enabled: !is-encoding && index + 1 < job-list.length; clicked => { move-job(index, 1); } }

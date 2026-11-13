@@ -1,12 +1,12 @@
 use crate::{
     JobItem, MainWindow,
     encoder::{self, Cancel, EncodeJob},
-    output,
-    seconds_to_hms, settings,
+    output, probe, seconds_to_hms, settings,
     windows::TaskbarProgress,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::{
+    cell::Cell,
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, Mutex},
@@ -17,25 +17,81 @@ use tokio::task::JoinHandle;
 pub struct Queue {
     pub files: Rc<VecModel<SharedString>>,
     jobs: Rc<VecModel<JobItem>>,
+    next_id: Cell<i32>,
+    probe_cancel: Cancel,
+    workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 impl Queue {
-    pub fn new(ui: &MainWindow) -> Rc<Self> {
+    pub fn new(
+        ui: &MainWindow,
+        probe_cancel: Cancel,
+        workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    ) -> Rc<Self> {
         let queue = Rc::new(Self {
             files: Rc::new(VecModel::default()),
             jobs: Rc::new(VecModel::default()),
+            next_id: Cell::new(0),
+            probe_cancel,
+            workers,
         });
         ui.set_file_list(ModelRc::from(queue.files.clone()));
         ui.set_job_list(ModelRc::from(queue.jobs.clone()));
         queue
     }
-    pub fn add(&self, path: &Path) {
+    fn push(&self, path: &Path, info: &str) -> i32 {
+        let id = self.next_id.get();
+        self.next_id.set(id + 1);
         let path: SharedString = path.to_string_lossy().into_owned().into();
         self.files.push(path.clone());
         self.jobs.push(JobItem {
+            id,
             path,
+            source_info: info.into(),
             status: "대기".into(),
             detail: SharedString::default(),
         });
+        id
+    }
+
+    pub fn add_files(&self, ui: &MainWindow, paths: Vec<PathBuf>) {
+        let ffmpeg = ui.get_ffmpeg_path().to_string();
+        if ffmpeg.is_empty() {
+            for path in paths {
+                self.push(&path, "FFmpeg 경로를 설정하세요.");
+            }
+            return;
+        }
+        if paths.is_empty() {
+            return;
+        }
+        let pending: Vec<_> = paths
+            .into_iter()
+            .map(|path| (self.push(&path, "원본 정보 읽는 중…"), path))
+            .collect();
+        let weak = ui.as_weak();
+        let cancel = self.probe_cancel.clone();
+        let worker = tokio::spawn(async move {
+            for (id, path) in pending {
+                if cancel.stopped() {
+                    break;
+                }
+                let info = probe::source_info(&ffmpeg, &path, &cancel)
+                    .await
+                    .unwrap_or_else(|_| "원본 정보를 읽을 수 없습니다.".into());
+                let _ = weak.upgrade_in_event_loop(move |ui| {
+                    let jobs = ui.get_job_list();
+                    if let Some((index, mut job)) =
+                        jobs.iter().enumerate().find(|(_, job)| job.id == id)
+                    {
+                        job.source_info = info.into();
+                        jobs.set_row_data(index, job);
+                    }
+                });
+            }
+        });
+        let mut handles = self.workers.lock().unwrap();
+        handles.retain(|handle| !handle.is_finished());
+        handles.push(worker);
     }
     fn remove(&self, index: usize) {
         self.files.remove(index);
@@ -254,9 +310,12 @@ mod tests {
         let queue = Queue {
             files: Rc::new(VecModel::default()),
             jobs: Rc::new(VecModel::default()),
+            next_id: Cell::new(0),
+            probe_cancel: Cancel::default(),
+            workers: Arc::new(Mutex::new(Vec::new())),
         };
         for name in ["pending.mp4", "done.mp4", "failed.mp4", "cancelled.mp4"] {
-            queue.add(Path::new(name));
+            queue.push(Path::new(name), "");
         }
         for (index, status) in [(1, "완료"), (2, "실패"), (3, "취소")] {
             let mut job = queue.jobs.row_data(index).unwrap();
@@ -345,9 +404,7 @@ pub fn setup(
                 )
                 .pick_files()
             {
-                for path in paths {
-                    q.add(&path);
-                }
+                q.add_files(&ui, paths);
             }
         }
     });
@@ -360,11 +417,12 @@ pub fn setup(
             }
             if let Some(path) = rfd::FileDialog::new().pick_folder() {
                 if let Ok(entries) = std::fs::read_dir(path) {
-                    for entry in entries.flatten() {
-                        if is_video_file(&entry.path()) {
-                            q.add(&entry.path());
-                        }
-                    }
+                    let paths = entries
+                        .flatten()
+                        .map(|entry| entry.path())
+                        .filter(|path| is_video_file(path))
+                        .collect();
+                    q.add_files(&ui, paths);
                 }
             }
         }

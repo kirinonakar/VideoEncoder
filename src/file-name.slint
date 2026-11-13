@@ -57,6 +57,33 @@ export component FileNameText inherits Text {
     }
 }
 
+export component QueueSource inherits VerticalLayout {
+    in property <string> path;
+    in property <string> info;
+
+    horizontal-stretch: 1;
+    spacing: 2px;
+
+    name-area := TouchArea {
+        min-width: 0px;
+        height: 20px;
+        FileNameText {
+            width: 100%;
+            height: 100%;
+            text: root.path;
+            font-size: 13px;
+            hovered: name-area.has-hover && !name-area.pressed;
+        }
+    }
+    Text {
+        text: root.info;
+        color: AppTheme.muted;
+        font-size: 12px;
+        overflow: elide;
+        min-width: 0px;
+    }
+}
+
 // Draw above the scroll view without taking focus or intercepting pointer events.
 export component FileNameTooltipLayer inherits Rectangle {
     in property <bool> in-popup;

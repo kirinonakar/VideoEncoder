@@ -3,7 +3,7 @@ use crate::{
     output, probe,
 };
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const SOURCE_EXTENSIONS: &[&str] = &[
     "mp4", "mkv", "avi", "mov", "wmv", "flv", "mpg", "mpeg", "webm", "m4v", "gif", "webp", "avif",
@@ -80,65 +80,6 @@ struct ConversionJob {
     resize: Resize,
 }
 
-fn source_video(media: &probe::Media) -> Result<&probe::Stream> {
-    if media.format.tags.major_brand == "avis" {
-        // FFprobe can list the primary still image before the animation track.
-        if let Some(animation) = media.streams.iter().find(|stream| {
-            stream.codec_type == "video"
-                && stream.disposition.attached_pic == 0
-                && stream
-                    .nb_frames
-                    .as_deref()
-                    .and_then(|count| count.parse::<u64>().ok())
-                    .is_some_and(|count| count > 1)
-        }) {
-            return Ok(animation);
-        }
-    }
-    media.video()
-}
-
-fn source_duration(media: &probe::Media, video: &probe::Stream) -> Option<f64> {
-    [&video.duration, &media.format.duration]
-        .into_iter()
-        .filter_map(|value| value.as_deref()?.parse::<f64>().ok())
-        .find(|duration| duration.is_finite() && *duration > 0.0)
-}
-
-async fn source_info(ffmpeg: &str, path: &Path, cancel: &Cancel) -> Result<String> {
-    let media = probe::analyze(ffmpeg, path, cancel).await?;
-    let video = source_video(&media)?;
-    let mut duration = source_duration(&media, video);
-    if duration.is_none() {
-        duration = probe::packet_duration(ffmpeg, path, video.index, cancel).await;
-    }
-    let rotation = video.side_data_list.iter().find_map(|side| side.rotation);
-    let (width, height) = if rotation.is_some_and(|angle| angle.abs() % 180.0 == 90.0) {
-        (video.height, video.width)
-    } else {
-        (video.width, video.height)
-    };
-    let size = if width > 0 && height > 0 {
-        format!("{width} × {height} px")
-    } else {
-        "해상도 확인 불가".into()
-    };
-    let time = if let Some(duration) = duration {
-        let ms = (duration * 1000.0).round() as u64;
-        let seconds = ms / 1000;
-        format!(
-            "{:02}:{:02}:{:02}.{:03}",
-            seconds / 3600,
-            seconds / 60 % 60,
-            seconds % 60,
-            ms % 1000
-        )
-    } else {
-        "길이 확인 불가".into()
-    };
-    Ok(format!("{size} · {time}"))
-}
-
 impl ConversionJob {
     fn output_path(&self) -> PathBuf {
         let mut name = PathBuf::from(self.source.file_name().unwrap_or_default());
@@ -153,7 +94,7 @@ impl ConversionJob {
         on_progress: impl Fn(Progress),
     ) -> Result<PathBuf> {
         let media = probe::analyze(ffmpeg, &self.source, cancel).await?;
-        let video = source_video(&media)?;
+        let video = probe::source_video(&media)?;
         let mut cmd = encoder::command(ffmpeg);
         cmd.args([
             "-hide_banner",
@@ -192,7 +133,7 @@ impl ConversionJob {
                 "-quality",
                 "95",
                 "-compression_level",
-                "6",
+                "4",
                 "-pix_fmt",
                 "bgra",
             ]),
@@ -211,7 +152,7 @@ impl ConversionJob {
         };
         cmd.args(["-fps_mode", "passthrough", "-enc_time_base", "1:1000"]);
         cmd.args(["-loop", "0", "-f", self.format.extension()]);
-        let duration = source_duration(&media, video).unwrap_or_default() as f32;
+        let duration = probe::source_duration(&media, video).unwrap_or_default() as f32;
         encoder::run_to_output(cmd, &self.output_path(), duration, cancel, on_progress).await
     }
 }

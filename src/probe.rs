@@ -115,12 +115,7 @@ pub async fn analyze(ffmpeg: &str, path: &Path, cancel: &Cancel) -> Result<Media
     serde_json::from_slice(&output.stdout).context("FFprobe JSON 분석 실패")
 }
 
-pub async fn packet_duration(
-    ffmpeg: &str,
-    path: &Path,
-    stream: u32,
-    cancel: &Cancel,
-) -> Option<f64> {
+async fn packet_duration(ffmpeg: &str, path: &Path, stream: u32, cancel: &Cancel) -> Option<f64> {
     let ffprobe = resolve_tool(ffmpeg, "ffprobe")?;
     let mut child = command(ffprobe)
         .args(["-v", "error", "-select_streams"])
@@ -157,6 +152,65 @@ pub async fn packet_duration(
         result = duration => result,
         _ = cancel.cancelled() => None,
     }
+}
+
+pub fn source_video(media: &Media) -> Result<&Stream> {
+    if media.format.tags.major_brand == "avis" {
+        // FFprobe can list the primary still image before the animation track.
+        if let Some(animation) = media.streams.iter().find(|stream| {
+            stream.codec_type == "video"
+                && stream.disposition.attached_pic == 0
+                && stream
+                    .nb_frames
+                    .as_deref()
+                    .and_then(|count| count.parse::<u64>().ok())
+                    .is_some_and(|count| count > 1)
+        }) {
+            return Ok(animation);
+        }
+    }
+    media.video()
+}
+
+pub fn source_duration(media: &Media, video: &Stream) -> Option<f64> {
+    [&video.duration, &media.format.duration]
+        .into_iter()
+        .filter_map(|value| value.as_deref()?.parse::<f64>().ok())
+        .find(|duration| duration.is_finite() && *duration > 0.0)
+}
+
+pub async fn source_info(ffmpeg: &str, path: &Path, cancel: &Cancel) -> Result<String> {
+    let media = analyze(ffmpeg, path, cancel).await?;
+    let video = source_video(&media)?;
+    let mut duration = source_duration(&media, video);
+    if duration.is_none() {
+        duration = packet_duration(ffmpeg, path, video.index, cancel).await;
+    }
+    let rotation = video.side_data_list.iter().find_map(|side| side.rotation);
+    let (width, height) = if rotation.is_some_and(|angle| angle.abs() % 180.0 == 90.0) {
+        (video.height, video.width)
+    } else {
+        (video.width, video.height)
+    };
+    let size = if width > 0 && height > 0 {
+        format!("{width} × {height} px")
+    } else {
+        "해상도 확인 불가".into()
+    };
+    let time = if let Some(duration) = duration {
+        let ms = (duration * 1000.0).round() as u64;
+        let seconds = ms / 1000;
+        format!(
+            "{:02}:{:02}:{:02}.{:03}",
+            seconds / 3600,
+            seconds / 60 % 60,
+            seconds % 60,
+            ms % 1000
+        )
+    } else {
+        "길이 확인 불가".into()
+    };
+    Ok(format!("{size} · {time}"))
 }
 
 pub async fn probe_video(ffmpeg: &str, path: &Path) -> Result<(f32, f32, f32, f32)> {
