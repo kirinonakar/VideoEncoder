@@ -491,6 +491,12 @@ export component MainWindow inherits Window {
                         primary: false;
                         clicked => { select-output-folder(); }
                     }
+                    Button {
+                        text: AppLanguage.tr("Reset", "초기화");
+                        primary: false;
+                        enabled: !is-encoding && !edit-busy && output-folder != "";
+                        clicked => { output-folder = ""; }
+                    }
                 }
 
                 HorizontalLayout {
