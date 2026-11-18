@@ -1,4 +1,7 @@
-use super::{AnimationFormat, Cancel, ConversionJob, Resize, SOURCE_EXTENSIONS};
+use super::{
+    ANIMATION_SOURCE_EXTENSIONS, AnimationFormat, Cancel, ConversionFormat, ConversionJob,
+    IMAGE_SOURCE_EXTENSIONS, ImageFormat, ImageOptions, Resize,
+};
 use crate::{
     ConversionItem, JobStatus, LocalizedText, MainWindow,
     language::{Language, diagnostic, message},
@@ -27,17 +30,55 @@ struct Queue {
 
 #[derive(PartialEq, Eq)]
 struct OutputOptions {
+    image_mode: bool,
     format: i32,
+    lossless: bool,
+    quality: i32,
+    compression: usize,
     width: SharedString,
     height: SharedString,
+    folder: SharedString,
+    suffix: SharedString,
 }
 
 impl OutputOptions {
     fn read(ui: &MainWindow) -> Self {
+        let image_mode = ui.get_conversion_mode() == 1;
         Self {
-            format: ui.get_conversion_format(),
+            image_mode,
+            format: if image_mode {
+                ui.get_image_format()
+            } else {
+                ui.get_conversion_format()
+            },
+            lossless: image_mode && ui.get_image_lossless(),
+            quality: if image_mode {
+                ui.get_image_quality().round().clamp(1.0, 100.0) as i32
+            } else {
+                0
+            },
+            compression: if image_mode {
+                ui.get_image_compression().clamp(0, 2) as usize
+            } else {
+                0
+            },
             width: ui.get_conversion_width(),
             height: ui.get_conversion_height(),
+            folder: ui.get_output_folder(),
+            suffix: ui.get_conversion_suffix(),
+        }
+    }
+
+    fn format(&self) -> anyhow::Result<ConversionFormat> {
+        if self.image_mode {
+            Ok(ConversionFormat::Image(ImageOptions {
+                format: ImageFormat::from_index(self.format)?,
+                lossless: self.lossless,
+                quality: self.quality,
+                compression: self.compression,
+            }))
+        } else {
+            AnimationFormat::from_index(self.format).map(ConversionFormat::Animation)
         }
     }
 }
@@ -50,7 +91,15 @@ fn update_job(ui: &MainWindow, id: i32, update: impl FnOnce(&mut ConversionItem)
     }
 }
 
-fn folder_files(folder: &Path) -> Vec<PathBuf> {
+fn source_extensions(ui: &MainWindow) -> &'static [&'static str] {
+    if ui.get_conversion_mode() == 1 {
+        IMAGE_SOURCE_EXTENSIONS
+    } else {
+        ANIMATION_SOURCE_EXTENSIONS
+    }
+}
+
+fn folder_files(folder: &Path, extensions: &[&str]) -> Vec<PathBuf> {
     let mut files: Vec<_> = fs::read_dir(folder)
         .into_iter()
         .flatten()
@@ -62,7 +111,7 @@ fn folder_files(folder: &Path) -> Vec<PathBuf> {
                     .extension()
                     .and_then(|ext| ext.to_str())
                     .is_some_and(|ext| {
-                        SOURCE_EXTENSIONS
+                        extensions
                             .iter()
                             .any(|supported| ext.eq_ignore_ascii_case(supported))
                     })
@@ -108,16 +157,21 @@ impl Queue {
 
     fn add(&self, ui: &MainWindow, paths: Vec<PathBuf>) {
         if paths.is_empty() {
-            ui.set_conversion_status(message!(
-                "No video or animation files to add.",
-                "추가할 동영상이나 애니메이션 파일이 없습니다.",
-            ));
+            ui.set_conversion_status(if ui.get_conversion_mode() == 1 {
+                message!("No image files to add.", "추가할 이미지 파일이 없습니다.")
+            } else {
+                message!(
+                    "No video or animation files to add.",
+                    "추가할 동영상이나 애니메이션 파일이 없습니다.",
+                )
+            });
             return;
         }
         ui.set_conversion_status(LocalizedText::default());
         ui.set_conversion_detail(LocalizedText::default());
         ui.set_conversion_progress(0.0);
         let ffmpeg = ui.get_ffmpeg_path().to_string();
+        let image_mode = ui.get_conversion_mode() == 1;
         let mut added = Vec::new();
         for path in paths {
             let id = self.next_id.get();
@@ -150,9 +204,12 @@ impl Queue {
                     if cancel.stopped() {
                         break;
                     }
-                    let info = probe::source_info(&ffmpeg, &path, &cancel)
-                        .await
-                        .unwrap_or_else(|_| probe::missing_source_info());
+                    let info = if image_mode {
+                        probe::image_info(&ffmpeg, &path, &cancel).await
+                    } else {
+                        probe::source_info(&ffmpeg, &path, &cancel).await
+                    }
+                    .unwrap_or_else(|_| probe::missing_source_info());
                     let _ = weak.upgrade_in_event_loop(move |ui| {
                         update_job(&ui, id, |job| job.source_info = info);
                     });
@@ -176,7 +233,18 @@ impl Queue {
             return;
         }
         let options = OutputOptions::read(ui);
-        let settings = AnimationFormat::from_index(options.format).and_then(|format| {
+        if options
+            .suffix
+            .contains(['<', '>', ':', '"', '/', '\\', '|', '?', '*'])
+            || options.suffix.chars().any(char::is_control)
+        {
+            ui.set_conversion_status(message!(
+                "Enter a suffix without characters that are invalid in filenames.",
+                "출력 접미사에 파일 이름으로 사용할 수 없는 문자가 있습니다."
+            ));
+            return;
+        }
+        let settings = options.format().and_then(|format| {
             Resize::parse(options.width.as_str(), options.height.as_str())
                 .map(|resize| (format, resize))
         });
@@ -187,7 +255,7 @@ impl Queue {
                 return;
             }
         };
-        let folder = PathBuf::from(ui.get_output_folder().as_str());
+        let folder = PathBuf::from(options.folder.as_str());
         let jobs: Vec<_> = self
             .jobs
             .iter()
@@ -204,6 +272,7 @@ impl Queue {
                     ConversionJob {
                         source: PathBuf::from(job.path.as_str()),
                         output_folder: folder.clone(),
+                        suffix: options.suffix.to_string(),
                         format,
                         resize,
                     },
@@ -340,11 +409,13 @@ pub fn setup(
     ui.on_pick_conversion_files(move || {
         if let Some(ui) = weak.upgrade().filter(|ui| !ui.get_conversion_busy()) {
             let language = Language::current(&ui);
+            let label = if ui.get_conversion_mode() == 1 {
+                language.select("Images", "이미지")
+            } else {
+                language.select("Videos and animations", "동영상 및 애니메이션")
+            };
             if let Some(paths) = rfd::FileDialog::new()
-                .add_filter(
-                    language.select("Videos and animations", "동영상 및 애니메이션"),
-                    SOURCE_EXTENSIONS,
-                )
+                .add_filter(label, source_extensions(&ui))
                 .add_filter(language.select("All files", "모든 파일"), &["*"])
                 .pick_files()
             {
@@ -357,7 +428,7 @@ pub fn setup(
     ui.on_pick_conversion_folder(move || {
         if let Some(ui) = weak.upgrade().filter(|ui| !ui.get_conversion_busy()) {
             if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                q.add(&ui, folder_files(&folder));
+                q.add(&ui, folder_files(&folder, source_extensions(&ui)));
             }
         }
     });
@@ -366,9 +437,10 @@ pub fn setup(
     ui.on_conversion_files_dropped(move |paths| {
         if let Some(ui) = weak.upgrade().filter(|ui| !ui.get_conversion_busy()) {
             let mut files = Vec::new();
+            let extensions = source_extensions(&ui);
             for path in paths.split('|').map(Path::new) {
                 if path.is_dir() {
-                    files.extend(folder_files(path));
+                    files.extend(folder_files(path, extensions));
                 } else if path.is_file() {
                     files.push(path.to_owned());
                 }

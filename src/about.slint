@@ -1,0 +1,55 @@
+import { AboutSlint, Button } from "std-widgets.slint";
+import { AppLanguage } from "language.slint";
+import { AppTheme } from "theme.slint";
+
+export component AboutPopup inherits PopupWindow {
+    in property <image> app-icon;
+    private property <string> repository: "https://github.com/kirinonakar/VideoEncoder";
+
+    close-policy: close-on-click-outside;
+    width: 420px;
+    height: 288px;
+
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: AppTheme.surface;
+        border-color: AppTheme.border;
+        border-width: 1px;
+        border-radius: 12px;
+
+        VerticalLayout {
+            padding: 18px;
+            spacing: 8px;
+            alignment: center;
+
+            Image {
+                source: root.app-icon;
+                height: 64px;
+                image-fit: contain;
+            }
+            Text {
+                text: AppLanguage.tr("About VideoEncoder", "VideoEncoder 정보");
+                color: AppTheme.text;
+                font-size: 20px;
+                font-weight: 700;
+                horizontal-alignment: center;
+            }
+            Button {
+                text: root.repository;
+                clicked => { Platform.open-url(root.repository); }
+            }
+            HorizontalLayout {
+                alignment: center;
+                AboutSlint { width: 280px; height: 88px; }
+            }
+            HorizontalLayout {
+                alignment: center;
+                Button {
+                    text: AppLanguage.tr("Close", "닫기");
+                    clicked => { root.close(); }
+                }
+            }
+        }
+    }
+}

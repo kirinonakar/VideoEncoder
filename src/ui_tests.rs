@@ -100,8 +100,24 @@ fn render_dropped_files() {
         window.draw_if_needed(|renderer| {
             renderer.render(&mut pixels, 900);
         });
+        pixels[345 * 900 + 250..345 * 900 + 650].to_vec()
     };
-    render();
+    let before_about = render();
+    let title = LogicalPosition::new(450.0, 34.0);
+    let button = PointerEventButton::Left;
+    ui.window().dispatch_event(WindowEvent::PointerPressed {
+        position: title,
+        button,
+    });
+    ui.window().dispatch_event(WindowEvent::PointerReleased {
+        position: title,
+        button,
+    });
+    assert_ne!(render(), before_about);
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: slint::platform::Key::Escape.into(),
+    });
+    assert_eq!(render(), before_about);
     ui.set_cut_mode(1);
     assert_eq!(ui.get_conversion_format(), 2);
     let toggle_language = || {
@@ -119,12 +135,24 @@ fn render_dropped_files() {
     assert_eq!(ui.get_conversion_format(), 2);
     assert!(!ui.get_dark_mode());
     ui.set_conversion_format(1);
+    ui.set_conversion_mode(1);
+    ui.set_conversion_suffix("_convert".into());
+    ui.set_image_format(7);
+    ui.set_image_lossless(true);
+    ui.set_image_quality(78.0);
+    ui.set_image_compression(2);
     settings.save(&ui).unwrap();
     let saved: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&settings_path).unwrap()).unwrap();
     assert_eq!(saved["language"], "KO");
     assert_eq!(saved["conversion_format"], 1);
     ui.set_conversion_format(2);
+    ui.set_conversion_mode(0);
+    ui.set_conversion_suffix("".into());
+    ui.set_image_format(0);
+    ui.set_image_lossless(false);
+    ui.set_image_quality(90.0);
+    ui.set_image_compression(1);
     settings::setup(&ui, settings_path.clone());
     ui.set_ffmpeg_path("".into());
     toggle_language();
@@ -132,6 +160,14 @@ fn render_dropped_files() {
     assert!(!ui.get_korean());
     assert_eq!(ui.get_cut_mode(), 1);
     assert_eq!(ui.get_conversion_format(), 1);
+    assert_eq!(ui.get_conversion_mode(), 1);
+    assert_eq!(ui.get_conversion_suffix(), "_convert");
+    assert_eq!(ui.get_image_format(), 7);
+    assert!(ui.get_image_lossless());
+    assert_eq!(ui.get_image_quality(), 78.0);
+    assert_eq!(ui.get_image_compression(), 2);
+    ui.set_conversion_mode(0);
+    ui.set_conversion_suffix("".into());
     ui.set_conversion_format(0);
     let path = directory.join(format!(
         "긴 파일명_日本語_{}.mp4",
@@ -172,6 +208,13 @@ fn render_dropped_files() {
         other.to_string_lossy()
     );
     ui.set_ffmpeg_path("ffmpeg".into());
+    ui.set_conversion_mode(1);
+    render();
+    ui.set_conversion_suffix("/invalid".into());
+    ui.invoke_start_conversion(false);
+    assert!(ui.get_conversion_status().english.contains("suffix"));
+    ui.set_conversion_mode(0);
+    ui.set_conversion_suffix("".into());
     ui.set_conversion_height("0".into());
     ui.invoke_start_conversion(false);
     assert!(!ui.get_conversion_busy());
@@ -406,4 +449,27 @@ fn check_conversion_batch(ui: &MainWindow, events: &mpsc::Receiver<Event>) {
     }
     assert!(scratch.0.join("first.avif").is_file());
     assert!(scratch.0.join("first (2).avif").is_file());
+
+    let images = scratch.0.join("images");
+    std::fs::create_dir(&images).unwrap();
+    image::RgbImage::new(20, 12)
+        .save(images.join("picture.png"))
+        .unwrap();
+    std::fs::write(images.join("video.mp4"), []).unwrap();
+    ui.invoke_clear_conversion_list();
+    ui.set_conversion_mode(1);
+    ui.set_image_format(7);
+    ui.set_image_lossless(true);
+    ui.set_conversion_suffix("_still".into());
+    ui.invoke_files_dropped(images.to_string_lossy().as_ref().into());
+    assert_eq!(jobs.row_count(), 1);
+    ui.invoke_start_conversion(false);
+    assert!(ui.get_conversion_busy());
+    while ui.get_conversion_busy() {
+        events
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()();
+    }
+    assert_eq!(jobs.row_data(0).unwrap().status, JobStatus::Done);
+    assert!(scratch.0.join("picture_still.jxl").is_file());
 }

@@ -25,17 +25,23 @@ fn webp_chunks(mut data: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> {
 
 async fn check_frames(ffmpeg: &str, path: &Path, size: (u64, u64), count: u64) {
     let ffprobe = probe::resolve_tool(ffmpeg, "ffprobe").unwrap();
+    let input_options = probe::input_options(path).await;
+    let (items, entries) = if input_options.contains(&"jpegxl_pipe") {
+        ("frames", "frame=stream_index,pts_time")
+    } else {
+        ("packets", "packet=stream_index,pts_time")
+    };
     let result = check_output(
         encoder::command(ffprobe)
+            .args(input_options)
             .args([
                 "-v",
                 "error",
                 "-count_frames",
                 "-show_entries",
-                "stream=width,height,nb_read_frames,duration:packet=stream_index,pts_time",
+                &format!("stream=width,height,nb_read_frames,duration:{entries}"),
                 "-of",
                 "json",
-                "-show_packets",
             ])
             .arg(path)
             .output()
@@ -55,7 +61,7 @@ async fn check_frames(ffmpeg: &str, path: &Path, size: (u64, u64), count: u64) {
         .expect("missing animation track");
     assert_eq!(streams[stream_index]["width"], size.0);
     assert_eq!(streams[stream_index]["height"], size.1);
-    let frame_times: Vec<_> = data["packets"]
+    let frame_times: Vec<_> = data[items]
         .as_array()
         .unwrap()
         .iter()
@@ -70,7 +76,7 @@ async fn check_frames(ffmpeg: &str, path: &Path, size: (u64, u64), count: u64) {
 }
 
 #[tokio::test]
-#[ignore = "Requires FFmpeg/FFprobe with animated WebP decoding, libwebp and libaom-av1"]
+#[ignore = "Requires FFmpeg/FFprobe with animated WebP decoding, libwebp, libaom-av1 and libjxl_anim"]
 async fn converts_all_formats_with_resize_and_preserves_animation() {
     let ffmpeg = which::which("ffmpeg")
         .unwrap()
@@ -113,11 +119,13 @@ async fn converts_all_formats_with_resize_and_preserves_animation() {
         (AnimationFormat::Gif, "", "", (160, 120)),
         (AnimationFormat::Webp, "79", "", (79, 59)),
         (AnimationFormat::Avif, "", "61", (81, 61)),
+        (AnimationFormat::Jxl, "79", "", (79, 59)),
     ] {
         let job = ConversionJob {
             source: src.clone(),
             output_folder: folder.clone(),
-            format,
+            suffix: String::new(),
+            format: ConversionFormat::Animation(format),
             resize: Resize::parse(width, height).unwrap(),
         };
         let path = job.run(&ffmpeg, &cancel, |_| {}).await.unwrap();
@@ -147,7 +155,8 @@ async fn converts_all_formats_with_resize_and_preserves_animation() {
     let job = ConversionJob {
         source: avif.clone(),
         output_folder: PathBuf::new(),
-        format: AnimationFormat::Avif,
+        suffix: String::new(),
+        format: ConversionFormat::Animation(AnimationFormat::Avif),
         resize: Resize::parse("65", "47").unwrap(),
     };
     let path = job.run(&ffmpeg, &cancel, |_| {}).await.unwrap();
@@ -155,10 +164,134 @@ async fn converts_all_formats_with_resize_and_preserves_animation() {
     assert_eq!(fs::read(avif).unwrap(), original);
     check_frames(&ffmpeg, &path, (65, 47), 12).await;
 
+    let path = ConversionJob {
+        source: folder.join("원본.jxl"),
+        output_folder: folder.clone(),
+        suffix: "_roundtrip".into(),
+        format: ConversionFormat::Animation(AnimationFormat::Gif),
+        resize: Resize::parse("", "").unwrap(),
+    }
+    .run(&ffmpeg, &cancel, |_| {})
+    .await
+    .unwrap();
+    assert_eq!(path, folder.join("원본_roundtrip.gif"));
+    check_frames(&ffmpeg, &path, (79, 59), 12).await;
+
     for entry in fs::read_dir(&folder).unwrap() {
         fs::remove_file(entry.unwrap().path()).unwrap();
     }
     fs::remove_dir(folder).unwrap();
+}
+
+#[tokio::test]
+#[ignore = "Requires FFmpeg/FFprobe with libwebp, libaom-av1 and libjxl"]
+async fn converts_still_images_with_compression_and_preserves_lossless_pixels() {
+    let ffmpeg = which::which("ffmpeg")
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let scratch = crate::encoder::integration_tests::TestDir::new();
+    let src = scratch.0.join("원본 50%.png");
+    let original = image::RgbaImage::from_fn(33, 25, |x, y| {
+        image::Rgba([
+            (x * 7) as u8,
+            (y * 9) as u8,
+            ((x + y) * 4) as u8,
+            (x + y + 100) as u8,
+        ])
+    });
+    original.save(&src).unwrap();
+    let cancel = Cancel::default();
+    let mut job = ConversionJob {
+        source: src.clone(),
+        output_folder: PathBuf::new(),
+        suffix: "_변환".into(),
+        format: ConversionFormat::Animation(AnimationFormat::Gif),
+        resize: Resize::parse("", "").unwrap(),
+    };
+    for (format, codec) in [
+        (ImageFormat::Png, "png"),
+        (ImageFormat::Jpeg, "mjpeg"),
+        (ImageFormat::Bmp, "bmp"),
+        (ImageFormat::Tiff, "tiff"),
+        (ImageFormat::Gif, "gif"),
+        (ImageFormat::Webp, "webp"),
+        (ImageFormat::Avif, "av1"),
+        (ImageFormat::Jxl, "jpegxl"),
+    ] {
+        job.format = ConversionFormat::Image(ImageOptions {
+            format,
+            lossless: true,
+            quality: 95,
+            compression: 2,
+        });
+        let path = job.run(&ffmpeg, &cancel, |_| {}).await.unwrap();
+        assert_eq!(
+            path,
+            scratch
+                .0
+                .join(format!("원본 50%_변환.{}", format.extension()))
+        );
+        let media = probe::analyze(&ffmpeg, &path, &cancel).await.unwrap();
+        let stream = probe::source_video(&media).unwrap();
+        assert_eq!(stream.codec_name, codec);
+        assert_eq!((stream.width, stream.height), (33, 25));
+        let pixels = check_output(
+            encoder::command(&ffmpeg)
+                .args(["-v", "error"])
+                .args(probe::input_options(&path).await)
+                .arg("-i")
+                .arg(&path)
+                .args([
+                    "-map",
+                    "0:v:0",
+                    "-fps_mode",
+                    "passthrough",
+                    "-pix_fmt",
+                    "rgba",
+                    "-f",
+                    "rawvideo",
+                    "-",
+                ])
+                .output()
+                .await
+                .unwrap(),
+        )
+        .stdout;
+        assert_eq!(pixels.len(), 33 * 25 * 4, "{}", format.extension());
+        if matches!(
+            format,
+            ImageFormat::Png | ImageFormat::Tiff | ImageFormat::Webp | ImageFormat::Jxl
+        ) {
+            assert_eq!(pixels, *original.as_raw(), "{}", format.extension());
+        }
+    }
+
+    job.source = scratch.0.join("원본 50%_변환.avif");
+    job.suffix = "_roundtrip".into();
+    job.format = ConversionFormat::Image(ImageOptions {
+        format: ImageFormat::Png,
+        lossless: true,
+        quality: 95,
+        compression: 0,
+    });
+    let roundtrip = job.run(&ffmpeg, &cancel, |_| {}).await.unwrap();
+    assert!(image::open(roundtrip).unwrap().to_rgba8() == original);
+
+    job.source = src;
+    job.suffix.clear();
+    job.resize = Resize::parse("17", "").unwrap();
+    for format in [ImageFormat::Webp, ImageFormat::Avif, ImageFormat::Jxl] {
+        job.format = ConversionFormat::Image(ImageOptions {
+            format,
+            lossless: false,
+            quality: 40,
+            compression: 0,
+        });
+        let path = job.run(&ffmpeg, &cancel, |_| {}).await.unwrap();
+        let size = probe::image_info(&ffmpeg, &path, &cancel).await.unwrap();
+        assert_eq!(size.english, "17 × 13 px");
+    }
 }
 
 #[tokio::test]
@@ -183,7 +316,8 @@ async fn webp_preserves_transparency_across_moving_frames() {
     let output = ConversionJob {
         source: source.clone(),
         output_folder: PathBuf::new(),
-        format: AnimationFormat::Webp,
+        suffix: String::new(),
+        format: ConversionFormat::Animation(AnimationFormat::Webp),
         resize: Resize::parse("", "").unwrap(),
     }
     .run(&ffmpeg, &Cancel::default(), |_| {})
@@ -194,7 +328,9 @@ async fn webp_preserves_transparency_across_moving_frames() {
     for path in [source, output] {
         let decoded = check_output(
             encoder::command(&ffmpeg)
-                .args(["-v", "error", "-i"])
+                .args(["-v", "error"])
+                .args(probe::input_options(&path).await)
+                .arg("-i")
                 .arg(path)
                 .args(["-vf", "alphaextract", "-f", "rawvideo", "-"])
                 .output()

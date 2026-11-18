@@ -44,6 +44,12 @@ struct Options {
     dark: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     conversion_format: Option<i32>,
+    conversion_mode: i32,
+    conversion_suffix: String,
+    image_format: i32,
+    image_lossless: bool,
+    image_quality: f32,
+    image_compression: i32,
 }
 
 impl Default for Options {
@@ -60,6 +66,12 @@ impl Default for Options {
             exact_cut: false,
             dark: false,
             conversion_format: None,
+            conversion_mode: 0,
+            conversion_suffix: String::new(),
+            image_format: 0,
+            image_lossless: false,
+            image_quality: 90.0,
+            image_compression: 1,
         }
     }
 }
@@ -118,6 +130,12 @@ impl Options {
             exact_cut: ui.get_cut_mode() == 1,
             dark: ui.get_dark_mode(),
             conversion_format: Some(ui.get_conversion_format()),
+            conversion_mode: ui.get_conversion_mode(),
+            conversion_suffix: ui.get_conversion_suffix().into(),
+            image_format: ui.get_image_format(),
+            image_lossless: ui.get_image_lossless(),
+            image_quality: ui.get_image_quality(),
+            image_compression: ui.get_image_compression(),
         }
     }
     fn apply(&self, ui: &MainWindow) {
@@ -139,9 +157,19 @@ impl Options {
         ui.set_preserve_subtitles(self.subtitles);
         ui.set_cut_mode(i32::from(self.exact_cut));
         ui.set_dark_mode(self.dark);
-        if let Some(format @ 0..=2) = self.conversion_format {
+        if let Some(format @ 0..=3) = self.conversion_format {
             ui.set_conversion_format(format);
         }
+        ui.set_conversion_mode(self.conversion_mode.clamp(0, 1));
+        ui.set_conversion_suffix(self.conversion_suffix.clone().into());
+        ui.set_image_format(self.image_format.clamp(0, 7));
+        ui.set_image_lossless(self.image_lossless);
+        ui.set_image_quality(if self.image_quality.is_finite() {
+            self.image_quality.round().clamp(1.0, 100.0)
+        } else {
+            90.0
+        });
+        ui.set_image_compression(self.image_compression.clamp(0, 2));
     }
 }
 

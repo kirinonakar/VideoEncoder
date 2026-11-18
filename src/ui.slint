@@ -4,6 +4,7 @@ import { AppTheme } from "theme.slint";
 import { EditorTimeline } from "editor-timeline.slint";
 import { FileNameText, FileNameTooltip, FileNameTooltipLayer, QueueSource } from "file-name.slint";
 import { ConversionItem, ConversionTab } from "conversion-tab.slint";
+import { AboutPopup } from "about.slint";
 
 // Custom ComboBox: 긴 파일명은 "…"으로 생략(elide)하고 드롭다운 화살표는 항상 표시한다.
 component VideoFileComboBox {
@@ -298,9 +299,15 @@ export component MainWindow inherits Window {
     in-out property <int> active-tab;
     out property <bool> conversion-tab-active: active-tab == 2;
     in-out property <[ConversionItem]> conversion-jobs;
+    in-out property <int> conversion-mode;
     in-out property <int> conversion-format: 2;
+    in-out property <int> image-format;
+    in-out property <bool> image-lossless;
+    in-out property <float> image-quality: 90;
+    in-out property <int> image-compression: 1;
     in-out property <string> conversion-width;
     in-out property <string> conversion-height;
+    in-out property <string> conversion-suffix;
     in-out property <bool> conversion-busy;
     in-out property <float> conversion-progress;
     in-out property <LocalizedText> conversion-status;
@@ -311,16 +318,22 @@ export component MainWindow inherits Window {
     changed encoder-index => { preset-options-changed(); }
     changed crf-value => { preset-options-changed(); }
     changed cq-value => { preset-options-changed(); }
-    changed output-folder => { preset-options-changed(); }
+    changed output-folder => { preset-options-changed(); conversion-options-changed(); }
     changed all-audio => { preset-options-changed(); }
     changed preserve-subtitles => { preset-options-changed(); }
     changed cut-mode => { preset-options-changed(); }
+    changed conversion-mode => { conversion-options-changed(); preset-options-changed(); }
     changed conversion-format => {
         conversion-options-changed();
         preset-options-changed();
     }
+    changed image-format => { conversion-options-changed(); preset-options-changed(); }
+    changed image-lossless => { conversion-options-changed(); preset-options-changed(); }
+    changed image-quality => { conversion-options-changed(); preset-options-changed(); }
+    changed image-compression => { conversion-options-changed(); preset-options-changed(); }
     changed conversion-width => { conversion-options-changed(); }
     changed conversion-height => { conversion-options-changed(); }
+    changed conversion-suffix => { conversion-options-changed(); preset-options-changed(); }
 
     VerticalBox {
         padding: 16px;
@@ -330,16 +343,40 @@ export component MainWindow inherits Window {
         Rectangle {
             height: 36px;
             vertical-stretch: 0;
-            Text {
-                x: theme-toggle.width + language-toggle.width + 6px;
-                width: parent.width - 2 * self.x;
+            about-title := FocusScope {
+                x: (parent.width - self.width) / 2;
+                width: title-text.preferred-width + 20px;
                 height: 100%;
-                text: "VideoEncoder FFmpeg Wrapper";
-                font-size: 20px;
-                font-weight: 700;
-                color: AppTheme.accent;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+                accessible-role: button;
+                accessible-label: AppLanguage.tr("About VideoEncoder", "VideoEncoder 정보");
+                accessible-action-default => { about.show(); }
+                key-pressed(event) => {
+                    if (event.text == Key.Return || event.text == Key.Space) {
+                        about.show();
+                        return accept;
+                    }
+                    return reject;
+                }
+                Rectangle {
+                    width: 100%;
+                    height: 100%;
+                    border-radius: 6px;
+                    background: title-touch.has-hover || about-title.has-focus ? AppTheme.hover : transparent;
+                }
+                title-text := Text {
+                    width: 100%;
+                    height: 100%;
+                    text: root.title;
+                    font-size: 20px;
+                    font-weight: 700;
+                    color: AppTheme.accent;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                title-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { about-title.focus(); about.show(); }
+                }
             }
             language-toggle := Button {
                 x: theme-toggle.x - self.width - 6px;
@@ -997,9 +1034,15 @@ export component MainWindow inherits Window {
                     progress: root.conversion-progress;
                     status: root.conversion-status;
                     detail: root.conversion-detail;
+                    mode-index <=> root.conversion-mode;
                     format-index <=> root.conversion-format;
+                    image-format <=> root.image-format;
+                    image-lossless <=> root.image-lossless;
+                    image-quality <=> root.image-quality;
+                    image-compression <=> root.image-compression;
                     resize-width <=> root.conversion-width;
                     resize-height <=> root.conversion-height;
+                    suffix <=> root.conversion-suffix;
                     pick-files => { root.pick-conversion-files(); }
                     pick-folder => { root.pick-conversion-folder(); }
                     remove-job(index) => { root.remove-conversion-job(index); }
@@ -1014,4 +1057,9 @@ export component MainWindow inherits Window {
         }
     }
     FileNameTooltipLayer {}
+    about := AboutPopup {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        app-icon: root.icon;
+    }
 }

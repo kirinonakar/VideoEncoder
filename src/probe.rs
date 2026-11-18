@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
 };
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
 #[derive(Debug, Default, Deserialize)]
 pub struct Stream {
@@ -41,6 +41,8 @@ pub struct Stream {
 pub struct StreamTags {
     #[serde(default, alias = "ALPHA_MODE")]
     pub alpha_mode: Option<String>,
+    #[serde(default)]
+    title: String,
 }
 #[derive(Debug, Deserialize)]
 pub struct SideData {
@@ -105,6 +107,32 @@ pub fn resolve_tool(ffmpeg: &str, name: &str) -> Option<PathBuf> {
         .or_else(|| which::which(name).ok())
 }
 
+pub async fn input_options(path: &Path) -> &'static [&'static str] {
+    let Some(extension) = path.extension() else {
+        return &[];
+    };
+    if extension.eq_ignore_ascii_case("jxl") {
+        // The default image demuxer uses 25 fps, which rounds embedded JPEG XL timestamps.
+        &["-f", "jpegxl_pipe", "-framerate", "1000"]
+    } else if extension.eq_ignore_ascii_case("webp") && animated_webp(path).await {
+        // Some FFmpeg builds let the still image demuxer win format detection.
+        &["-f", "webp_anim"]
+    } else {
+        &[]
+    }
+}
+
+async fn animated_webp(path: &Path) -> bool {
+    let Ok(mut file) = tokio::fs::File::open(path).await else {
+        return false;
+    };
+    let mut header = [0; 21];
+    file.read_exact(&mut header).await.is_ok()
+        && &header[..4] == b"RIFF"
+        && &header[8..16] == b"WEBPVP8X"
+        && header[20] & 0x02 != 0
+}
+
 pub async fn analyze(ffmpeg: &str, path: &Path, cancel: &Cancel) -> Result<Media> {
     let ffprobe = resolve_tool(ffmpeg, "ffprobe").context(message!(
         "ffprobe was not found. Install it next to FFmpeg or on PATH.",
@@ -119,6 +147,7 @@ pub async fn analyze(ffmpeg: &str, path: &Path, cancel: &Cancel) -> Result<Media
         "-of",
         "json",
     ])
+    .args(input_options(path).await)
     .arg(path)
     .stdin(Stdio::null());
     let output = tokio::select! {
@@ -139,17 +168,24 @@ pub async fn analyze(ffmpeg: &str, path: &Path, cancel: &Cancel) -> Result<Media
     ))
 }
 
-async fn packet_duration(ffmpeg: &str, path: &Path, stream: u32, cancel: &Cancel) -> Option<f64> {
+async fn stream_duration(
+    ffmpeg: &str,
+    path: &Path,
+    stream: &Stream,
+    cancel: &Cancel,
+) -> Option<f64> {
     let ffprobe = resolve_tool(ffmpeg, "ffprobe")?;
+    let entries = if stream.codec_name == "jpegxl" {
+        // JPEG XL can contain many decoded frames in one demuxed packet.
+        "frame=pts_time,duration_time"
+    } else {
+        "packet=pts_time,duration_time"
+    };
     let mut child = command(ffprobe)
         .args(["-v", "error", "-select_streams"])
-        .arg(stream.to_string())
-        .args([
-            "-show_entries",
-            "packet=pts_time,duration_time",
-            "-of",
-            "csv=p=0",
-        ])
+        .arg(stream.index.to_string())
+        .args(["-show_entries", entries, "-of", "csv=p=0"])
+        .args(input_options(path).await)
         .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -196,6 +232,21 @@ pub fn source_video(media: &Media) -> Result<&Stream> {
     media.video()
 }
 
+pub fn still_avif_alpha<'a>(media: &'a Media, color: &Stream) -> Option<&'a Stream> {
+    if media.format.tags.major_brand != "avif" {
+        return None;
+    }
+    media.streams.iter().find(|stream| {
+        stream.index != color.index
+            && stream.codec_name == "av1"
+            && stream.pix_fmt.starts_with("gray")
+            && stream.width == color.width
+            && stream.height == color.height
+            // FFmpeg exposes this AVIF auxiliary image as a separate stream.
+            && stream.tags.title.eq_ignore_ascii_case("alpha")
+    })
+}
+
 pub fn source_duration(media: &Media, video: &Stream) -> Option<f64> {
     [&video.duration, &media.format.duration]
         .into_iter()
@@ -219,19 +270,9 @@ pub async fn source_info(ffmpeg: &str, path: &Path, cancel: &Cancel) -> Result<L
     let video = source_video(&media)?;
     let mut duration = source_duration(&media, video);
     if duration.is_none() {
-        duration = packet_duration(ffmpeg, path, video.index, cancel).await;
+        duration = stream_duration(ffmpeg, path, video, cancel).await;
     }
-    let rotation = video.side_data_list.iter().find_map(|side| side.rotation);
-    let (width, height) = if rotation.is_some_and(|angle| angle.abs() % 180.0 == 90.0) {
-        (video.height, video.width)
-    } else {
-        (video.width, video.height)
-    };
-    let size = if width > 0 && height > 0 {
-        LocalizedText::same(format!("{width} × {height} px"))
-    } else {
-        message!("Unknown resolution", "해상도 확인 불가")
-    };
+    let size = source_size(video);
     let time = if let Some(duration) = duration {
         let ms = (duration * 1000.0).round() as u64;
         let seconds = ms / 1000;
@@ -249,6 +290,25 @@ pub async fn source_info(ffmpeg: &str, path: &Path, cancel: &Cancel) -> Result<L
         format!("{} · {}", size.english, time.english),
         format!("{} · {}", size.korean, time.korean),
     ))
+}
+
+pub async fn image_info(ffmpeg: &str, path: &Path, cancel: &Cancel) -> Result<LocalizedText> {
+    let media = analyze(ffmpeg, path, cancel).await?;
+    Ok(source_size(source_video(&media)?))
+}
+
+fn source_size(video: &Stream) -> LocalizedText {
+    let rotation = video.side_data_list.iter().find_map(|side| side.rotation);
+    let (width, height) = if rotation.is_some_and(|angle| angle.abs() % 180.0 == 90.0) {
+        (video.height, video.width)
+    } else {
+        (video.width, video.height)
+    };
+    if width > 0 && height > 0 {
+        LocalizedText::same(format!("{width} × {height} px"))
+    } else {
+        message!("Unknown resolution", "해상도 확인 불가")
+    }
 }
 
 pub async fn probe_video(ffmpeg: &str, path: &Path) -> Result<(f32, f32, f32, f32)> {
