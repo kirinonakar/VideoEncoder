@@ -8,7 +8,7 @@ export component AboutPopup inherits PopupWindow {
 
     close-policy: close-on-click-outside;
     width: 420px;
-    height: 288px;
+    height: content.preferred-height;
 
     Rectangle {
         width: 100%;
@@ -18,7 +18,7 @@ export component AboutPopup inherits PopupWindow {
         border-width: 1px;
         border-radius: 12px;
 
-        VerticalLayout {
+        content := VerticalLayout {
             padding: 18px;
             spacing: 8px;
             alignment: center;
@@ -41,7 +41,8 @@ export component AboutPopup inherits PopupWindow {
             }
             HorizontalLayout {
                 alignment: center;
-                AboutSlint { width: 280px; height: 88px; }
+                height: slint-badge.min-height;
+                slint-badge := AboutSlint { width: 280px; }
             }
             HorizontalLayout {
                 alignment: center;

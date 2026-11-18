@@ -102,17 +102,23 @@ fn render_dropped_files() {
         });
         pixels[345 * 900 + 250..345 * 900 + 650].to_vec()
     };
+    let click = |x, y| {
+        let position = LogicalPosition::new(x, y);
+        let button = PointerEventButton::Left;
+        ui.window()
+            .dispatch_event(WindowEvent::PointerPressed { position, button });
+        ui.window()
+            .dispatch_event(WindowEvent::PointerReleased { position, button });
+    };
     let before_about = render();
-    let title = LogicalPosition::new(450.0, 34.0);
-    let button = PointerEventButton::Left;
-    ui.window().dispatch_event(WindowEvent::PointerPressed {
-        position: title,
-        button,
-    });
-    ui.window().dispatch_event(WindowEvent::PointerReleased {
-        position: title,
-        button,
-    });
+    click(450.0, 34.0);
+    assert_ne!(render(), before_about);
+    // The padding below the close button is still inside the popup.
+    click(320.0, 552.0);
+    assert_ne!(render(), before_about);
+    click(450.0, 532.0);
+    assert_eq!(render(), before_about);
+    click(450.0, 34.0);
     assert_ne!(render(), before_about);
     ui.window().dispatch_event(WindowEvent::KeyPressed {
         text: slint::platform::Key::Escape.into(),
@@ -120,14 +126,7 @@ fn render_dropped_files() {
     assert_eq!(render(), before_about);
     ui.set_cut_mode(1);
     assert_eq!(ui.get_conversion_format(), 2);
-    let toggle_language = || {
-        let position = LogicalPosition::new(812.0, 34.0);
-        let button = PointerEventButton::Left;
-        ui.window()
-            .dispatch_event(WindowEvent::PointerPressed { position, button });
-        ui.window()
-            .dispatch_event(WindowEvent::PointerReleased { position, button });
-    };
+    let toggle_language = || click(812.0, 34.0);
     toggle_language();
     render();
     assert!(ui.get_korean());
@@ -231,7 +230,16 @@ fn render_dropped_files() {
     }
     ui.set_active_tab(0);
     check_named_presets(&ui, &settings_path);
+    ui.set_dark_mode(true);
+    click(400.0, 34.0);
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: slint::platform::Key::Escape.into(),
+    });
+    ui.window().dispatch_event(WindowEvent::PointerMoved {
+        position: LogicalPosition::new(400.0, 20.0),
+    });
     render();
+    assert_eq!(pixels[20 * 900 + 400], pixels[20 * 900 + 200]);
     ui.hide().unwrap();
     preview.stop_playback();
     std::fs::remove_file(path).unwrap();
