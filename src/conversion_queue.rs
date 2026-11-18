@@ -474,6 +474,20 @@ pub fn setup(
     });
     let weak = ui.as_weak();
     let q = queue.clone();
+    ui.on_remove_completed_conversion_jobs(move || {
+        if let Some(ui) = weak.upgrade().filter(|ui| !ui.get_conversion_busy()) {
+            for index in (0..q.jobs.row_count()).rev() {
+                if q.jobs
+                    .row_data(index)
+                    .is_some_and(|job| job.status == JobStatus::Done)
+                {
+                    ui.invoke_remove_conversion_job(index as i32);
+                }
+            }
+        }
+    });
+    let weak = ui.as_weak();
+    let q = queue.clone();
     ui.on_clear_conversion_list(move || {
         if let Some(ui) = weak.upgrade().filter(|ui| !ui.get_conversion_busy()) {
             q.jobs.set_vec(Vec::new());

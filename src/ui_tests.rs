@@ -187,6 +187,25 @@ fn render_dropped_files() {
     render();
     window.set_size(slint::PhysicalSize::new(800, 760));
     render();
+    let pending_path = path.with_file_name("pending.mp4");
+    queue.add_files(&ui, vec![pending_path.clone()]);
+    let encoding_jobs = ui.get_job_list();
+    let mut completed_job = encoding_jobs.row_data(0).unwrap();
+    completed_job.status = JobStatus::Done;
+    encoding_jobs.set_row_data(0, completed_job);
+    ui.set_selected_index(1);
+    ui.invoke_remove_completed_jobs();
+    assert_eq!(ui.get_selected_index(), 0);
+    assert_eq!(encoding_jobs.row_count(), 1);
+    assert_eq!(
+        encoding_jobs.row_data(0).unwrap().status,
+        JobStatus::Waiting
+    );
+    assert_eq!(queue.files.row_count(), 1);
+    assert_eq!(
+        queue.files.row_data(0).unwrap().as_str(),
+        pending_path.to_str().unwrap()
+    );
     ui.invoke_clear_list();
     assert_eq!(ui.get_job_list().row_count(), 0);
     render();
@@ -457,6 +476,12 @@ fn check_conversion_batch(ui: &MainWindow, events: &mpsc::Receiver<Event>) {
     }
     assert!(scratch.0.join("first.avif").is_file());
     assert!(scratch.0.join("first (2).avif").is_file());
+
+    ui.invoke_remove_completed_conversion_jobs();
+    assert_eq!(jobs.row_count(), 1);
+    assert_eq!(jobs.row_data(0).unwrap().status, JobStatus::Failed);
+    assert!(scratch.0.join("first.avif").is_file());
+    assert!(scratch.0.join("second.avif").is_file());
 
     let images = scratch.0.join("images");
     std::fs::create_dir(&images).unwrap();

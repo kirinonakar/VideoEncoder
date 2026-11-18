@@ -468,6 +468,20 @@ pub fn setup(
     });
     let weak = ui.as_weak();
     let q = queue.clone();
+    ui.on_remove_completed_jobs(move || {
+        if let Some(ui) = weak.upgrade().filter(|ui| !ui.get_is_encoding()) {
+            for index in (0..q.jobs.row_count()).rev() {
+                if q.jobs
+                    .row_data(index)
+                    .is_some_and(|job| job.status == JobStatus::Done)
+                {
+                    ui.invoke_remove_job(index as i32);
+                }
+            }
+        }
+    });
+    let weak = ui.as_weak();
+    let q = queue.clone();
     ui.on_clear_list(move || {
         if let Some(ui) = weak.upgrade() {
             if !ui.get_is_encoding() {

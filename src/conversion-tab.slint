@@ -36,6 +36,7 @@ export component ConversionTab inherits VerticalLayout {
     callback pick-folder();
     callback remove-job(int);
     callback move-job(int, int);
+    callback remove-completed-jobs();
     callback clear-list();
     callback show-result(int);
     callback start();
@@ -202,6 +203,7 @@ export component ConversionTab inherits VerticalLayout {
                 Rectangle { horizontal-stretch: 1; }
                 Button { text: AppLanguage.tr("Add files", "파일 추가"); enabled: !root.busy; clicked => { root.pick-files(); } }
                 Button { text: AppLanguage.tr("Add folder", "폴더 추가"); enabled: !root.busy; clicked => { root.pick-folder(); } }
+                Button { text: AppLanguage.tr("Remove completed", "완료항목 제거"); enabled: !root.busy && root.jobs.length > 0; clicked => { root.remove-completed-jobs(); } }
                 Button { text: AppLanguage.tr("Clear queue", "목록 비우기"); enabled: !root.busy && root.jobs.length > 0; clicked => { root.clear-list(); } }
             }
 

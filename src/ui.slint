@@ -206,6 +206,7 @@ export component MainWindow inherits Window {
     callback stop-encoding();
     callback pick-files();
     callback pick-folder();
+    callback remove-completed-jobs();
     callback clear-list();
     callback remove-job(int);
     callback move-job(int, int);
@@ -291,6 +292,7 @@ export component MainWindow inherits Window {
     callback conversion-files-dropped(string);
     callback remove-conversion-job(int);
     callback move-conversion-job(int, int);
+    callback remove-completed-conversion-jobs();
     callback clear-conversion-list();
     callback show-conversion-result(int);
     callback conversion-options-changed();
@@ -553,6 +555,7 @@ export component MainWindow inherits Window {
                         spacing: 8px;
                         Button { enabled: !is-encoding; text: AppLanguage.tr("Add files", "파일 추가"); clicked => { pick-files(); } }
                         Button { enabled: !is-encoding; text: AppLanguage.tr("Add folder", "폴더 추가"); clicked => { pick-folder(); } }
+                        Button { enabled: !is-encoding && job-list.length > 0; text: AppLanguage.tr("Remove completed", "완료항목 제거"); clicked => { remove-completed-jobs(); } }
                         Button { enabled: !is-encoding; text: AppLanguage.tr("Clear queue", "목록 비우기"); clicked => { clear-list(); } }
                     }
                 }
@@ -1041,6 +1044,7 @@ export component MainWindow inherits Window {
                     pick-folder => { root.pick-conversion-folder(); }
                     remove-job(index) => { root.remove-conversion-job(index); }
                     move-job(index, delta) => { root.move-conversion-job(index, delta); }
+                    remove-completed-jobs => { root.remove-completed-conversion-jobs(); }
                     clear-list => { root.clear-conversion-list(); }
                     show-result(index) => { root.show-conversion-result(index); }
                     start => { root.start-conversion(false); }
