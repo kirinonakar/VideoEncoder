@@ -69,9 +69,14 @@ fn render_dropped_files() {
     std::fs::write(&settings_path, r#"{"encoder":0}"#).unwrap();
     settings::setup(&ui, settings_path.clone());
     assert_eq!(Language::current(&ui), Language::system());
-    std::fs::write(&settings_path, r#"{"encoder":0,"language":"EN"}"#).unwrap();
+    std::fs::write(
+        &settings_path,
+        r#"{"encoder":0,"language":"EN","output_folder":"encode"}"#,
+    )
+    .unwrap();
     let settings = settings::setup(&ui, settings_path.clone());
     assert_eq!(Language::current(&ui), Language::En);
+    assert_eq!(ui.get_conversion_output_folder(), "encode");
     let workers = Arc::new(Mutex::new(Vec::new()));
     let queue = Queue::new(&ui, Cancel::default(), workers.clone());
     let taskbar = TaskbarProgress::new();
@@ -136,6 +141,7 @@ fn render_dropped_files() {
     ui.set_conversion_format(1);
     ui.set_conversion_mode(1);
     ui.set_conversion_suffix("_convert".into());
+    ui.set_conversion_output_folder("convert".into());
     ui.set_image_format(7);
     ui.set_image_lossless(true);
     ui.set_image_quality(78.0);
@@ -145,9 +151,12 @@ fn render_dropped_files() {
         serde_json::from_slice(&std::fs::read(&settings_path).unwrap()).unwrap();
     assert_eq!(saved["language"], "KO");
     assert_eq!(saved["conversion_format"], 1);
+    assert_eq!(saved["output_folder"], "encode");
+    assert_eq!(saved["conversion_output_folder"], "convert");
     ui.set_conversion_format(2);
     ui.set_conversion_mode(0);
     ui.set_conversion_suffix("".into());
+    ui.set_conversion_output_folder("".into());
     ui.set_image_format(0);
     ui.set_image_lossless(false);
     ui.set_image_quality(90.0);
@@ -161,6 +170,8 @@ fn render_dropped_files() {
     assert_eq!(ui.get_conversion_format(), 1);
     assert_eq!(ui.get_conversion_mode(), 1);
     assert_eq!(ui.get_conversion_suffix(), "_convert");
+    assert_eq!(ui.get_output_folder(), "encode");
+    assert_eq!(ui.get_conversion_output_folder(), "convert");
     assert_eq!(ui.get_image_format(), 7);
     assert!(ui.get_image_lossless());
     assert_eq!(ui.get_image_quality(), 78.0);
@@ -277,6 +288,7 @@ fn check_named_presets(ui: &MainWindow, path: &Path) {
     ui.set_crf_value(24.0);
     ui.set_output_suffix("_cpu".into());
     ui.set_conversion_format(1);
+    ui.set_conversion_output_folder("preset-convert".into());
     ui.set_preset_name("  고화질  ".into());
     ui.invoke_save_preset();
     slint::platform::update_timers_and_animations();
@@ -287,6 +299,7 @@ fn check_named_presets(ui: &MainWindow, path: &Path) {
 
     ui.set_encoder_index(1);
     ui.set_cq_value(28.0);
+    ui.set_conversion_output_folder("".into());
     ui.set_preset_name("NVENC".into());
     ui.invoke_save_preset();
     slint::platform::update_timers_and_animations();
@@ -301,6 +314,7 @@ fn check_named_presets(ui: &MainWindow, path: &Path) {
     assert_eq!(ui.get_encoder_index(), 0);
     assert_eq!(ui.get_output_suffix(), "_cpu");
     assert_eq!(ui.get_conversion_format(), 1);
+    assert_eq!(ui.get_conversion_output_folder(), "preset-convert");
     assert_eq!(ui.get_preset_name(), "고화질");
 
     ui.set_crf_value(22.0);
@@ -330,6 +344,7 @@ fn check_named_presets(ui: &MainWindow, path: &Path) {
     assert_eq!(ui.get_preset_index(), 2);
     assert_eq!(ui.get_encoder_index(), 1);
     assert_eq!(ui.get_cq_value(), 28.0);
+    assert!(ui.get_conversion_output_folder().is_empty());
 
     ui.set_conversion_format(0);
     slint::platform::update_timers_and_animations();
@@ -366,6 +381,8 @@ fn check_conversion_batch(ui: &MainWindow, events: &mpsc::Receiver<Event>) {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let _runtime_guard = runtime.enter();
     let scratch = crate::encoder::integration_tests::TestDir::new();
+    let converted = scratch.0.join("converted");
+    std::fs::create_dir(&converted).unwrap();
     let sources = [scratch.0.join("first.mkv"), scratch.0.join("second.mkv")];
     for (source, size) in sources.iter().zip(["96x64", "64x48"]) {
         let fixture = std::process::Command::new("ffmpeg")
@@ -408,6 +425,7 @@ fn check_conversion_batch(ui: &MainWindow, events: &mpsc::Receiver<Event>) {
     ui.set_conversion_height("".into());
     ui.set_conversion_width("48".into());
     ui.set_output_folder(scratch.0.to_string_lossy().as_ref().into());
+    ui.set_conversion_output_folder(converted.to_string_lossy().as_ref().into());
     ui.invoke_files_dropped(
         format!(
             "{}|{}|{}",
@@ -447,9 +465,11 @@ fn check_conversion_batch(ui: &MainWindow, events: &mpsc::Receiver<Event>) {
     assert_eq!(jobs.row_data(0).unwrap().status, JobStatus::Done);
     assert_eq!(jobs.row_data(1).unwrap().status, JobStatus::Failed);
     assert_eq!(jobs.row_data(2).unwrap().status, JobStatus::Done);
-    assert!(scratch.0.join("first.gif").is_file());
-    assert!(scratch.0.join("second.gif").is_file());
+    assert!(converted.join("first.gif").is_file());
+    assert!(converted.join("second.gif").is_file());
+    assert!(!scratch.0.join("first.gif").exists());
 
+    ui.set_output_folder(scratch.0.join("encoding").to_string_lossy().as_ref().into());
     slint::platform::update_timers_and_animations();
     assert_eq!(jobs.row_data(0).unwrap().status, JobStatus::Done);
     for change_option in [
@@ -474,14 +494,14 @@ fn check_conversion_batch(ui: &MainWindow, events: &mpsc::Receiver<Event>) {
         assert_eq!(jobs.row_data(0).unwrap().status, JobStatus::Done);
         assert_eq!(jobs.row_data(2).unwrap().status, JobStatus::Done);
     }
-    assert!(scratch.0.join("first.avif").is_file());
-    assert!(scratch.0.join("first (2).avif").is_file());
+    assert!(converted.join("first.avif").is_file());
+    assert!(converted.join("first (2).avif").is_file());
 
     ui.invoke_remove_completed_conversion_jobs();
     assert_eq!(jobs.row_count(), 1);
     assert_eq!(jobs.row_data(0).unwrap().status, JobStatus::Failed);
-    assert!(scratch.0.join("first.avif").is_file());
-    assert!(scratch.0.join("second.avif").is_file());
+    assert!(converted.join("first.avif").is_file());
+    assert!(converted.join("second.avif").is_file());
 
     let images = scratch.0.join("images");
     std::fs::create_dir(&images).unwrap();
@@ -494,6 +514,7 @@ fn check_conversion_batch(ui: &MainWindow, events: &mpsc::Receiver<Event>) {
     ui.set_image_format(7);
     ui.set_image_lossless(true);
     ui.set_conversion_suffix("_still".into());
+    ui.set_conversion_output_folder("".into());
     ui.invoke_files_dropped(images.to_string_lossy().as_ref().into());
     assert_eq!(jobs.row_count(), 1);
     ui.invoke_start_conversion(false);
@@ -504,5 +525,5 @@ fn check_conversion_batch(ui: &MainWindow, events: &mpsc::Receiver<Event>) {
             .unwrap()();
     }
     assert_eq!(jobs.row_data(0).unwrap().status, JobStatus::Done);
-    assert!(scratch.0.join("picture_still.jxl").is_file());
+    assert!(images.join("picture_still.jxl").is_file());
 }

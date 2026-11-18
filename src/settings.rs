@@ -45,6 +45,8 @@ struct Options {
     #[serde(skip_serializing_if = "Option::is_none")]
     conversion_format: Option<i32>,
     conversion_mode: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conversion_output_folder: Option<String>,
     conversion_suffix: String,
     image_format: i32,
     image_lossless: bool,
@@ -67,6 +69,7 @@ impl Default for Options {
             dark: false,
             conversion_format: None,
             conversion_mode: 0,
+            conversion_output_folder: None,
             conversion_suffix: String::new(),
             image_format: 0,
             image_lossless: false,
@@ -131,6 +134,7 @@ impl Options {
             dark: ui.get_dark_mode(),
             conversion_format: Some(ui.get_conversion_format()),
             conversion_mode: ui.get_conversion_mode(),
+            conversion_output_folder: Some(ui.get_conversion_output_folder().into()),
             conversion_suffix: ui.get_conversion_suffix().into(),
             image_format: ui.get_image_format(),
             image_lossless: ui.get_image_lossless(),
@@ -161,6 +165,13 @@ impl Options {
             ui.set_conversion_format(format);
         }
         ui.set_conversion_mode(self.conversion_mode.clamp(0, 1));
+        // Older settings and presets shared the encoding folder with conversion.
+        ui.set_conversion_output_folder(
+            self.conversion_output_folder
+                .as_deref()
+                .unwrap_or(&self.output_folder)
+                .into(),
+        );
         ui.set_conversion_suffix(self.conversion_suffix.clone().into());
         ui.set_image_format(self.image_format.clamp(0, 7));
         ui.set_image_lossless(self.image_lossless);

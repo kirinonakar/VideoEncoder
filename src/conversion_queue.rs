@@ -64,7 +64,7 @@ impl OutputOptions {
             },
             width: ui.get_conversion_width(),
             height: ui.get_conversion_height(),
-            folder: ui.get_output_folder(),
+            folder: ui.get_conversion_output_folder(),
             suffix: ui.get_conversion_suffix(),
         }
     }
@@ -401,6 +401,15 @@ pub fn setup(
     ui.on_conversion_options_changed(move || {
         if let Some(ui) = weak.upgrade().filter(|ui| !ui.get_conversion_busy()) {
             q.requeue_completed(&ui);
+        }
+    });
+
+    let weak = ui.as_weak();
+    ui.on_select_conversion_output_folder(move || {
+        if let Some(ui) = weak.upgrade().filter(|ui| !ui.get_conversion_busy()) {
+            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                ui.set_conversion_output_folder(folder.to_string_lossy().into_owned().into());
+            }
         }
     });
 

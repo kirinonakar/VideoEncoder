@@ -289,6 +289,7 @@ export component MainWindow inherits Window {
 
     callback pick-conversion-files();
     callback pick-conversion-folder();
+    callback select-conversion-output-folder();
     callback conversion-files-dropped(string);
     callback remove-conversion-job(int);
     callback move-conversion-job(int, int);
@@ -309,6 +310,7 @@ export component MainWindow inherits Window {
     in-out property <int> image-compression: 1;
     in-out property <string> conversion-width;
     in-out property <string> conversion-height;
+    in-out property <string> conversion-output-folder;
     in-out property <string> conversion-suffix;
     in-out property <bool> conversion-busy;
     in-out property <float> conversion-progress;
@@ -320,7 +322,7 @@ export component MainWindow inherits Window {
     changed encoder-index => { preset-options-changed(); }
     changed crf-value => { preset-options-changed(); }
     changed cq-value => { preset-options-changed(); }
-    changed output-folder => { preset-options-changed(); conversion-options-changed(); }
+    changed output-folder => { preset-options-changed(); }
     changed all-audio => { preset-options-changed(); }
     changed preserve-subtitles => { preset-options-changed(); }
     changed cut-mode => { preset-options-changed(); }
@@ -335,6 +337,7 @@ export component MainWindow inherits Window {
     changed image-compression => { conversion-options-changed(); preset-options-changed(); }
     changed conversion-width => { conversion-options-changed(); }
     changed conversion-height => { conversion-options-changed(); }
+    changed conversion-output-folder => { conversion-options-changed(); preset-options-changed(); }
     changed conversion-suffix => { conversion-options-changed(); preset-options-changed(); }
 
     VerticalBox {
@@ -1025,7 +1028,7 @@ export component MainWindow inherits Window {
 
                 ConversionTab {
                     jobs: root.conversion-jobs;
-                    output-folder: root.output-folder;
+                    output-folder <=> root.conversion-output-folder;
                     busy: root.conversion-busy;
                     other-job-running: root.is-encoding || root.edit-busy;
                     progress: root.conversion-progress;
@@ -1042,6 +1045,7 @@ export component MainWindow inherits Window {
                     suffix <=> root.conversion-suffix;
                     pick-files => { root.pick-conversion-files(); }
                     pick-folder => { root.pick-conversion-folder(); }
+                    select-output-folder => { root.select-conversion-output-folder(); }
                     remove-job(index) => { root.remove-conversion-job(index); }
                     move-job(index, delta) => { root.move-conversion-job(index, delta); }
                     remove-completed-jobs => { root.remove-completed-conversion-jobs(); }

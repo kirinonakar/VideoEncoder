@@ -1,7 +1,7 @@
 import { AppLanguage, JobStatus, LocalizedText, LanguageComboBox } from "language.slint";
 import { Button, CheckBox, LineEdit, ProgressIndicator, ScrollView, Slider, TextEdit } from "std-widgets.slint";
 import { AppTheme } from "theme.slint";
-import { FileNameText, QueueSource } from "file-name.slint";
+import { QueueSource } from "file-name.slint";
 
 export struct ConversionItem {
     id: int,
@@ -13,7 +13,7 @@ export struct ConversionItem {
 
 export component ConversionTab inherits VerticalLayout {
     in property <[ConversionItem]> jobs;
-    in property <string> output-folder;
+    in-out property <string> output-folder;
     in property <bool> busy;
     in property <bool> other-job-running;
     in property <float> progress;
@@ -34,6 +34,7 @@ export component ConversionTab inherits VerticalLayout {
     private property <bool> can-set-compression: image-format == 0 || image-format == 3 || can-toggle-lossless;
     callback pick-files();
     callback pick-folder();
+    callback select-output-folder();
     callback remove-job(int);
     callback move-job(int, int);
     callback remove-completed-jobs();
@@ -165,17 +166,24 @@ export component ConversionTab inherits VerticalLayout {
             HorizontalLayout {
                 spacing: 10px;
                 Text { text: AppLanguage.tr("Output folder", "출력 폴더"); width: 98px; color: AppTheme.text; vertical-alignment: center; }
-                Rectangle {
+                LineEdit {
                     horizontal-stretch: 1;
-                    folder-hover := TouchArea { }
-                    FileNameText {
-                        width: parent.width;
-                        height: parent.height;
-                        text: root.output-folder != "" ? root.output-folder : AppLanguage.tr("Same as source", "원본과 같은 폴더");
-                        hovered: folder-hover.has-hover;
-                    }
+                    text <=> root.output-folder;
+                    placeholder-text: AppLanguage.tr("Same as source by default", "기본값: 원본과 동일");
+                    enabled: !root.busy;
                 }
-                Text { text: AppLanguage.tr("Set on the Encode tab", "인코딩 탭에서 설정"); color: AppTheme.muted; font-size: 12px; vertical-alignment: center; }
+                Button {
+                    text: AppLanguage.tr("Choose", "선택");
+                    primary: false;
+                    enabled: !root.busy;
+                    clicked => { root.select-output-folder(); }
+                }
+                Button {
+                    text: AppLanguage.tr("Reset", "초기화");
+                    primary: false;
+                    enabled: !root.busy && root.output-folder != "";
+                    clicked => { root.output-folder = ""; }
+                }
             }
         }
     }
